@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, FileResponse
+import os
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
@@ -199,15 +200,16 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         if not level:
             raise HTTPException(status_code=404, detail="Level not found or you are not the creator")
         
-        latest_version = db.query(func.max(models.LevelVersion.version_number)).filter(
-            models.LevelVersion.level_id == level.id
-        ).scalar() or 0
+        latest_version = db.query(models.LevelVersion).filter(models.LevelVersion.level_id == level.id).order_by(models.LevelVersion.version_number.desc()).first()
+        version_number = latest_version.version_number + 1 if latest_version else 1
+        previous_stars = latest_version.stars if latest_version else 0
         
         new_version = models.LevelVersion(
             level_id=level.id,
-            version_number=latest_version + 1,
+            version_number=version_number,
             data=data_b64,
-            requested_stars=level_upload.suggested_difficulty
+            requested_stars=level_upload.suggested_difficulty,
+            stars=previous_stars
         )
         db.add(new_version)
         db.commit()
@@ -271,7 +273,7 @@ def list_levels(db: Session = Depends(get_db), current_user: Optional[models.Use
             if rx: has_reacted = "like" if rx.is_like else "dislike"
             
         results.append({
-            "level_id": l.level_id,
+            "id": l.level_id,
             "title": l.title,
             "creator_name": creator_name,
             "stars": version.stars,
@@ -310,22 +312,29 @@ def get_level(level_id: str, db: Session = Depends(get_db)):
         # Fallback for old uncompressed levels
         pass
         
+    likes_count = db.query(models.LevelLike).filter(models.LevelLike.level_id == level.id, models.LevelLike.is_like == True).count()
+    dislikes_count = db.query(models.LevelLike).filter(models.LevelLike.level_id == level.id, models.LevelLike.is_like == False).count()
+    
+    ratings = db.query(models.Rating).filter(models.Rating.level_version_id == version.id).all()
+    ratings_count = len(ratings)
+    community_rating = sum(r.rating for r in ratings) / ratings_count if ratings_count > 0 else 0
+        
     return {
-        "level_id": level.level_id,
+        "id": level.level_id,
         "title": level.title,
         "creator_name": level.creator.username if level.creator else "Unknown",
         "data": raw_data,
         "published_version_id": version.id,
-        "stars": level.stars,
-        "plays": level.plays,
-        "community_rating": level.community_rating,
-        "ratings_count": level.ratings_count,
-        "likes": level.likes,
-        "dislikes": level.dislikes
+        "stars": version.stars,
+        "plays": version.plays,
+        "community_rating": community_rating,
+        "ratings_count": ratings_count,
+        "likes": likes_count,
+        "dislikes": dislikes_count
     }
 
 @app.delete("/levels/{level_id}")
-def delete_level(level_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+def delete_level(level_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     level = db.query(models.Level).filter(models.Level.level_id == level_id).first()
     if not level:
         raise HTTPException(status_code=404, detail="Level not found")
@@ -359,25 +368,17 @@ def rate_level(version_id: int, rating: schemas.RatingCreate, db: Session = Depe
     db.add(new_rating)
     db.commit()
     
-    level = version.level
-    if level.published_version_id == version_id:
-        all_ratings = db.query(models.Rating).filter(models.Rating.level_version_id == version_id).all()
-        if all_ratings:
-            avg = sum(r.rating for r in all_ratings) / len(all_ratings)
-            level.community_rating = int(round(avg))
-            level.ratings_count = len(all_ratings)
-            db.commit()
-            
+    return {"success": True}
     return {"success": True}
 
 @app.post("/levels/{level_id}/like")
-def like_level(level_id: int, is_like: bool, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+def like_level(level_id: str, is_like: bool, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     level = db.query(models.Level).filter(models.Level.level_id == level_id).first()
     if not level:
         raise HTTPException(status_code=404, detail="Level not found")
         
     existing = db.query(models.LevelLike).filter(
-        models.LevelLike.level_id == level_id,
+        models.LevelLike.level_id == level.id,
         models.LevelLike.user_id == current_user.id
     ).first()
     
@@ -385,17 +386,11 @@ def like_level(level_id: int, is_like: bool, db: Session = Depends(get_db), curr
         if existing.is_like == is_like:
             return {"success": True} # no change
         else:
-            if existing.is_like: level.likes -= 1
-            else: level.dislikes -= 1
             existing.is_like = is_like
-            if is_like: level.likes += 1
-            else: level.dislikes += 1
             db.commit()
     else:
-        new_like = models.LevelLike(level_id=level_id, user_id=current_user.id, is_like=is_like)
+        new_like = models.LevelLike(level_id=level.id, user_id=current_user.id, is_like=is_like)
         db.add(new_like)
-        if is_like: level.likes = (level.likes or 0) + 1
-        else: level.dislikes = (level.dislikes or 0) + 1
         db.commit()
         
     return {"success": True}
@@ -409,11 +404,10 @@ def moderate_level(version_id: int, status: str, stars: int, db: Session = Depen
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
         
-    level = version.level
     if status == "rate":
-        level.stars = stars
+        version.stars = stars
     elif status == "unrate":
-        level.stars = 0
+        version.stars = 0
         
     db.commit()
     return {"success": True}
@@ -443,13 +437,13 @@ def complete_level(version_id: int, db: Session = Depends(get_db), current_user:
 
 # --- COMMENTS ---
 @app.post("/levels/{level_id}/comment")
-def post_comment(level_id: int, comment: schemas.CommentCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+def post_comment(level_id: str, comment: schemas.CommentCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     level = db.query(models.Level).filter(models.Level.level_id == level_id).first()
     if not level:
         raise HTTPException(status_code=404, detail="Level not found")
         
     new_comment = models.Comment(
-        level_id=level_id,
+        level_id=level.id,
         user_id=current_user.id,
         text=comment.text
     )
@@ -459,8 +453,11 @@ def post_comment(level_id: int, comment: schemas.CommentCreate, db: Session = De
     return new_comment
 
 @app.get("/levels/{level_id}/comments")
-def get_comments(level_id: int, db: Session = Depends(get_db)):
-    comments = db.query(models.Comment).filter(models.Comment.level_id == level_id).order_by(models.Comment.created_at.desc()).all()
+def get_comments(level_id: str, db: Session = Depends(get_db)):
+    level = db.query(models.Level).filter(models.Level.level_id == level_id).first()
+    if not level:
+        return []
+    comments = db.query(models.Comment).filter(models.Comment.level_id == level.id).order_by(models.Comment.created_at.desc()).all()
     results = []
     for c in comments:
         results.append({
@@ -470,6 +467,18 @@ def get_comments(level_id: int, db: Session = Depends(get_db)):
             "created_at": c.created_at
         })
     return results
+
+# --- UPDATER ROUTES ---
+@app.get("/version")
+def check_version():
+    return {"success": True, "version": "1.0.1"}
+
+@app.get("/download_update")
+def download_update():
+    path = "server/client_updates/main.py"
+    if os.path.exists(path):
+        return FileResponse(path, filename="main.py")
+    return {"success": False, "error": "No update available"}
 
 @app.get("/")
 def read_root():
