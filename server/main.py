@@ -274,6 +274,7 @@ def list_levels(db: Session = Depends(get_db), current_user: Optional[models.Use
             
         results.append({
             "id": l.level_id,
+            "level_id": l.level_id,
             "title": l.title,
             "creator_name": creator_name,
             "stars": version.stars,
@@ -321,6 +322,7 @@ def get_level(level_id: str, db: Session = Depends(get_db)):
         
     return {
         "id": level.level_id,
+        "level_id": level.level_id,
         "title": level.title,
         "creator_name": level.creator.username if level.creator else "Unknown",
         "data": raw_data,
