@@ -443,7 +443,7 @@ def complete_level(version_id: int, db: Session = Depends(get_db), current_user:
         
         # Award stars if this is the published version and it has stars
         if version.is_current_published and version.stars > 0:
-            current_user.stars = (current_user.stars or 0) + version.stars
+            current_user.user_stars = (current_user.user_stars or 0) + version.stars
             
         db.commit()
     return {"success": True}
