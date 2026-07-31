@@ -69,11 +69,23 @@ class Game:
                             except: pass
         except: pass
         
+        def auto_login_cb(res):
+            if not res.get("success") and res.get("status_code") == 0:
+                import threading, time
+                def retry():
+                    time.sleep(1)
+                    if last_logged_in and last_logged_in in self.saved_accounts:
+                        self.network.login(last_logged_in, self.saved_accounts[last_logged_in], auto_login_cb)
+                    elif self.saved_accounts:
+                        first_user = list(self.saved_accounts.keys())[0]
+                        self.network.login(first_user, self.saved_accounts[first_user], auto_login_cb)
+                threading.Thread(target=retry, daemon=True).start()
+
         if last_logged_in and last_logged_in in self.saved_accounts:
-            self.network.login(last_logged_in, self.saved_accounts[last_logged_in], lambda r: None)
+            self.network.login(last_logged_in, self.saved_accounts[last_logged_in], auto_login_cb)
         elif self.saved_accounts:
             first_user = list(self.saved_accounts.keys())[0]
-            self.network.login(first_user, self.saved_accounts[first_user], lambda r: None)
+            self.network.login(first_user, self.saved_accounts[first_user], auto_login_cb)
         
         self.audio.play_menu_music()
 
@@ -660,7 +672,6 @@ class Game:
                         if login_btn.collidepoint(logical_mouse):
                             self.online_status_msg = "Logging in..."
                             def cb(res):
-                                import json, base64
                                 if res.get("success"):
                                     self.state = "MENU"
                                     self.online_status_msg = ""
@@ -1974,5 +1985,11 @@ class Game:
 
 if __name__ == "__main__":
     init_folders()
-    game = Game()
-    game.run()
+    try:
+        game = Game()
+        game.run()
+    except Exception as e:
+        import traceback
+        with open("crash_log.txt", "w") as f:
+            f.write(traceback.format_exc())
+        raise
