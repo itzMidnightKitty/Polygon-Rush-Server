@@ -194,11 +194,11 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
             raise HTTPException(status_code=404, detail="Level not found or you are not the creator")
         
         latest_version = db.query(func.max(models.LevelVersion.version_number)).filter(
-            models.LevelVersion.level_id == level.level_id
+            models.LevelVersion.level_id == level.id
         ).scalar() or 0
         
         new_version = models.LevelVersion(
-            level_id=level.level_id,
+            level_id=level.id,
             version_number=latest_version + 1,
             data=data_b64
         )
@@ -211,7 +211,10 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         return {"success": True, "level_id": level.level_id}
         
     else:
+        import uuid
+        new_lvl_id = str(uuid.uuid4())[:8]
         new_level = models.Level(
+            level_id=new_lvl_id,
             title=level_upload.title,
             creator_id=current_user.id,
             suggested_difficulty=level_upload.suggested_difficulty
@@ -221,7 +224,7 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         db.refresh(new_level)
         
         new_version = models.LevelVersion(
-            level_id=new_level.level_id,
+            level_id=new_level.id,
             version_number=1,
             data=data_b64
         )
