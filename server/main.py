@@ -17,13 +17,18 @@ app = FastAPI(title="Polygon Rush API")
 
 @app.post("/register", response_model=schemas.UserResponse)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    if not user.username or not user.username.strip():
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    if not user.password or not user.password.strip():
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+        
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
     
     hashed_password = auth.get_password_hash(user.password)
     new_user = models.User(username=user.username, password_hash=hashed_password)
-    if user.username.lower() == "midnight":
+    if user.username.lower() == "itzmidnightkitty":
         new_user.is_admin = True
         new_user.is_moderator = True
     db.add(new_user)
@@ -157,6 +162,20 @@ def admin_update_user_stats(username: str, stats: dict, db: Session = Depends(ge
     
     db.commit()
     return {"success": True, "message": "User stats updated"}
+
+@app.post("/admin/users/{username}/mod")
+def toggle_user_mod(username: str, data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+        
+    target = db.query(models.User).filter(func.lower(models.User.username) == username.lower()).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    target.is_moderator = data.get("is_moderator", False)
+    db.commit()
+    return {"success": True, "is_moderator": target.is_moderator}
+
 
 # --- LEVEL ROUTES ---
 
