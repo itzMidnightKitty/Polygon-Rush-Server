@@ -220,16 +220,17 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         return {"success": True, "level_id": level.level_id}
         
     else:
-        import uuid
-        new_lvl_id = str(uuid.uuid4())[:8]
         new_level = models.Level(
-            level_id=new_lvl_id,
+            level_id="temp",
             title=level_upload.title,
             creator_id=current_user.id
         )
         db.add(new_level)
         db.commit()
         db.refresh(new_level)
+        
+        new_level.level_id = str(new_level.id)
+        db.commit()
         
         new_version = models.LevelVersion(
             level_id=new_level.id,
@@ -406,10 +407,16 @@ def moderate_level(version_id: int, status: str, stars: int, db: Session = Depen
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
         
-    if status == "rate":
+    if status == "published":
         version.stars = stars
-    elif status == "unrate":
+        version.status = "published"
+        version.is_current_published = True
+    elif status == "rejected":
         version.stars = 0
+        version.status = "rejected"
+        version.is_current_published = False
+    elif status == "sent_to_admin":
+        version.status = "sent_to_admin"
         
     db.commit()
     return {"success": True}
