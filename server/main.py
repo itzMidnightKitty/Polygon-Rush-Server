@@ -255,8 +255,8 @@ def list_levels(db: Session = Depends(get_db), current_user: Optional[models.Use
         if not version:
             continue
             
-        likes_count = db.query(models.LevelLike).filter(models.LevelLike.level_id == l.level_id, models.LevelLike.is_like == True).count()
-        dislikes_count = db.query(models.LevelLike).filter(models.LevelLike.level_id == l.level_id, models.LevelLike.is_like == False).count()
+        likes_count = db.query(models.LevelLike).filter(models.LevelLike.level_id == l.id, models.LevelLike.is_like == True).count()
+        dislikes_count = db.query(models.LevelLike).filter(models.LevelLike.level_id == l.id, models.LevelLike.is_like == False).count()
         
         ratings = db.query(models.Rating).filter(models.Rating.level_version_id == version.id).all()
         ratings_count = len(ratings)
@@ -267,7 +267,7 @@ def list_levels(db: Session = Depends(get_db), current_user: Optional[models.Use
         if current_user:
             r = db.query(models.Rating).filter(models.Rating.level_version_id == version.id, models.Rating.user_id == current_user.id).first()
             if r: has_rated = True
-            rx = db.query(models.LevelLike).filter(models.LevelLike.level_id == l.level_id, models.LevelLike.user_id == current_user.id).first()
+            rx = db.query(models.LevelLike).filter(models.LevelLike.level_id == l.id, models.LevelLike.user_id == current_user.id).first()
             if rx: has_reacted = "like" if rx.is_like else "dislike"
             
         results.append({
