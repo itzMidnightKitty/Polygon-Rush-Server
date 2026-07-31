@@ -200,7 +200,8 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         new_version = models.LevelVersion(
             level_id=level.id,
             version_number=latest_version + 1,
-            data=data_b64
+            data=data_b64,
+            requested_stars=level_upload.suggested_difficulty
         )
         db.add(new_version)
         db.commit()
@@ -216,8 +217,7 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         new_level = models.Level(
             level_id=new_lvl_id,
             title=level_upload.title,
-            creator_id=current_user.id,
-            suggested_difficulty=level_upload.suggested_difficulty
+            creator_id=current_user.id
         )
         db.add(new_level)
         db.commit()
@@ -226,7 +226,8 @@ def upload_level(level_upload: schemas.LevelUpload, db: Session = Depends(get_db
         new_version = models.LevelVersion(
             level_id=new_level.id,
             version_number=1,
-            data=data_b64
+            data=data_b64,
+            requested_stars=level_upload.suggested_difficulty
         )
         db.add(new_version)
         db.commit()
