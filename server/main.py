@@ -407,10 +407,15 @@ def moderate_level(version_id: int, status: str, stars: int, db: Session = Depen
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
         
+    level = version.level
+    was_published = version.is_current_published
+    
     if status == "published":
         version.stars = stars
         version.status = "published"
         version.is_current_published = True
+        if not was_published and level.creator:
+            level.creator.creator_points = (level.creator.creator_points or 0) + 1
     elif status == "rejected":
         version.stars = 0
         version.status = "rejected"
@@ -437,9 +442,8 @@ def complete_level(version_id: int, db: Session = Depends(get_db), current_user:
         db.add(comp)
         
         # Award stars if this is the published version and it has stars
-        level = version.level
-        if level.published_version_id == version_id and level.stars > 0:
-            pass
+        if version.is_current_published and version.stars > 0:
+            current_user.stars = (current_user.stars or 0) + version.stars
             
         db.commit()
     return {"success": True}
@@ -480,7 +484,7 @@ def get_comments(level_id: str, db: Session = Depends(get_db)):
 # --- UPDATER ROUTES ---
 @app.get("/version")
 def check_version():
-    return {"success": True, "version": "1.0.1"}
+    return {"success": True, "version": 2.1}
 
 @app.get("/download_update")
 def download_update():
