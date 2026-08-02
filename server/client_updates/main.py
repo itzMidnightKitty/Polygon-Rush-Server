@@ -312,7 +312,7 @@ class Game:
     def handle_moderate_popup_click(self, logical_mouse):
         popup_rect = pygame.Rect(config.BASE_W//2 - 300, config.BASE_H//2 - 150, 600, 300)
         if popup_rect.collidepoint(logical_mouse):
-            is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
+            is_admin = getattr(self, 'my_profile_data', {}).get('is_admin') or getattr(self, 'my_profile_data', {}).get('is_moderator') or (getattr(self, 'selected_level_data', {}).get('creator_name') == getattr(self.network, 'username', ''))
             if is_admin:
                 diffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
                 for i, d in enumerate(diffs):
@@ -369,7 +369,7 @@ class Game:
                     draw_difficulty_face(self.screen, bx + 10, by, 35, i)
                 
             elif self.active_popup == "moderate":
-                is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
+                is_admin = getattr(self, 'my_profile_data', {}).get('is_admin') or getattr(self, 'my_profile_data', {}).get('is_moderator') or (getattr(self, 'selected_level_data', {}).get('creator_name') == getattr(self.network, 'username', ''))
                 
                 diff_names = {1:"Easy", 2:"Normal", 3:"Hard", 4:"Harder", 5:"Insane", 6:"Easy Demon", 7:"Medium Demon", 8:"Hard Demon", 9:"Insane Demon", 10:"Extreme Demon"}
                 req_stars = getattr(self, 'selected_level_data', {}).get('requested_stars', 0)
@@ -494,6 +494,8 @@ class Game:
     def run(self):
         running = True
         while running:
+            if not isinstance(getattr(self, 'my_profile_data', {}), dict):
+                self.my_profile_data = {}
             self.network.update()
             keys = pygame.key.get_pressed()
             raw_mouse_pos = pygame.mouse.get_pos()
@@ -988,13 +990,13 @@ class Game:
                                 if res.get("success"): self.selected_level_data['has_reacted'] = 'dislike'; self.selected_level_data['dislikes'] += 1
                             self.network.like_level(lvl.get('level_id'), False, cb_dislike)
                             
+                        is_creator = lvl.get('creator_name') == self.network.username
                         is_mod_or_admin = getattr(self, 'my_profile_data', {}).get('is_admin') or getattr(self, 'my_profile_data', {}).get('is_moderator')
-                        if mod_btn.collidepoint(logical_mouse) and is_mod_or_admin:
+                        if mod_btn.collidepoint(logical_mouse) and (is_mod_or_admin or is_creator):
                             self.active_popup = "moderate"
                             self.popup_version_id = lvl.get('published_version_id')
                             self.popup_level_id = lvl.get('level_id')
                             
-                        is_creator = lvl.get('creator_name') == self.network.username
                         if (is_creator or getattr(self, 'my_profile_data', {}).get('is_admin')) and del_btn.collidepoint(logical_mouse):
                             def cb_del(res):
                                 if res.get("success"): self.state = "ONLINE_HUB"; self.load_online_hub()
@@ -1059,10 +1061,27 @@ class Game:
                             else:
                                 is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
                                 if is_admin:
-                                    b_btn = pygame.Rect(config.BASE_W//2 - 100, 480, 200, 40)
-                                    d_btn = pygame.Rect(config.BASE_W//2 - 100, 530, 200, 40)
+                                    b_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
+                                    cp_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 400, 80, 30)
+                                    cp_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 400, 80, 30)
+                                    star_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 440, 80, 30)
+                                    star_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 440, 80, 30)
+                                    d_btn = pygame.Rect(config.BASE_W//2 - 100, 550, 200, 40)
+                                    
                                     if b_btn.collidepoint(logical_mouse):
                                         self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/ban", None, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
+                                        self.audio.play_sfx('button.mp3')
+                                    elif cp_plus_btn.collidepoint(logical_mouse):
+                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"creator_points": 1}, lambda r: self.load_profile(self.profile_data.get('username')))
+                                        self.audio.play_sfx('button.mp3')
+                                    elif cp_minus_btn.collidepoint(logical_mouse):
+                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"creator_points": -1}, lambda r: self.load_profile(self.profile_data.get('username')))
+                                        self.audio.play_sfx('button.mp3')
+                                    elif star_plus_btn.collidepoint(logical_mouse):
+                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"user_stars": 1}, lambda r: self.load_profile(self.profile_data.get('username')))
+                                        self.audio.play_sfx('button.mp3')
+                                    elif star_minus_btn.collidepoint(logical_mouse):
+                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"user_stars": -1}, lambda r: self.load_profile(self.profile_data.get('username')))
                                         self.audio.play_sfx('button.mp3')
                                     elif d_btn.collidepoint(logical_mouse):
                                         self.network._make_request("DELETE", f"/admin/users/{self.profile_data.get('username')}", None, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
@@ -1304,12 +1323,34 @@ class Game:
                         else:
                             is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
                             if is_admin:
-                                b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(480), S(200), S(40))
+                                b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(500), S(200), S(40))
                                 pygame.draw.rect(self.screen, config.ORANGE, b_btn, 0, S(5))
                                 bt = self.font.render("BAN USER", True, config.WHITE)
                                 self.screen.blit(bt, (b_btn.centerx - bt.get_width()//2, b_btn.centery - bt.get_height()//2))
                                 
-                                d_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(530), S(200), S(40))
+                                # CP and Stars buttons
+                                cp_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(400), S(80), S(30))
+                                cp_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(400), S(80), S(30))
+                                star_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(440), S(80), S(30))
+                                star_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(440), S(80), S(30))
+                                
+                                pygame.draw.rect(self.screen, config.GREEN, cp_plus_btn, 0, S(5))
+                                pygame.draw.rect(self.screen, config.RED, cp_minus_btn, 0, S(5))
+                                pygame.draw.rect(self.screen, config.YELLOW, star_plus_btn, 0, S(5))
+                                pygame.draw.rect(self.screen, config.RED, star_minus_btn, 0, S(5))
+                                
+                                small_font = pygame.font.Font(None, S(24))
+                                cp1_t = small_font.render("+1 CP", True, config.BLACK)
+                                cp2_t = small_font.render("-1 CP", True, config.WHITE)
+                                st1_t = small_font.render("+1 Star", True, config.BLACK)
+                                st2_t = small_font.render("-1 Star", True, config.WHITE)
+                                
+                                self.screen.blit(cp1_t, (cp_plus_btn.centerx - cp1_t.get_width()//2, cp_plus_btn.centery - cp1_t.get_height()//2))
+                                self.screen.blit(cp2_t, (cp_minus_btn.centerx - cp2_t.get_width()//2, cp_minus_btn.centery - cp2_t.get_height()//2))
+                                self.screen.blit(st1_t, (star_plus_btn.centerx - st1_t.get_width()//2, star_plus_btn.centery - st1_t.get_height()//2))
+                                self.screen.blit(st2_t, (star_minus_btn.centerx - st2_t.get_width()//2, star_minus_btn.centery - st2_t.get_height()//2))
+                                
+                                d_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(550), S(200), S(40))
                                 pygame.draw.rect(self.screen, config.RED, d_btn, 0, S(5))
                                 dt = self.font.render("DELETE USER", True, config.WHITE)
                                 self.screen.blit(dt, (d_btn.centerx - dt.get_width()//2, d_btn.centery - dt.get_height()//2))
@@ -1383,7 +1424,7 @@ class Game:
                     dt = self.font.render("DELETE LEVEL", True, config.WHITE)
                     self.screen.blit(dt, (del_btn.centerx - dt.get_width()//2, del_btn.centery - dt.get_height()//2))
                     
-                if is_admin or is_mod:
+                if is_admin or is_mod or is_creator:
                     mod_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(540), S(200), S(40))
                     pygame.draw.rect(self.screen, config.PURPLE, mod_btn, 0, S(5))
                     mt = self.font.render("MODERATE", True, config.WHITE)

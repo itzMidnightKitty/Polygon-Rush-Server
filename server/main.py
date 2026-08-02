@@ -400,12 +400,14 @@ def like_level(level_id: str, is_like: bool, db: Session = Depends(get_db), curr
 
 @app.post("/level_versions/{version_id}/moderate")
 def moderate_level(version_id: int, status: str, stars: int, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-    if not current_user.is_moderator and not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Not authorized")
-        
     version = db.query(models.LevelVersion).filter(models.LevelVersion.id == version_id).first()
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
+        
+    if not current_user.is_moderator and not current_user.is_admin:
+        if version.level.creator_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
         
     level = version.level
     was_published = version.is_current_published
