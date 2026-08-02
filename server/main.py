@@ -29,7 +29,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     
     hashed_password = auth.get_password_hash(user.password)
     new_user = models.User(username=user.username, password_hash=hashed_password)
-    if user.username.lower() == "itzmidnightkitty":
+    if user.username == "itzMidnightKitty":
         new_user.is_admin = True
         new_user.is_moderator = True
     db.add(new_user)
@@ -46,7 +46,7 @@ def login(user: schemas.UserCreate, db: Session = Depends(get_db)):
             detail="Incorrect username or password",
         )
         
-    if db_user.username.lower() == "itzmidnightkitty":
+    if db_user.username == "itzMidnightKitty":
         if not db_user.is_admin or not db_user.is_moderator:
             db_user.is_admin = True
             db_user.is_moderator = True
@@ -484,7 +484,7 @@ def get_comments(level_id: str, db: Session = Depends(get_db)):
 # --- UPDATER ROUTES ---
 @app.get("/version")
 def check_version():
-    return {"success": True, "version": 2.1}
+    return {"success": True, "version": 1.3}
 
 @app.get("/download_update")
 def download_update():

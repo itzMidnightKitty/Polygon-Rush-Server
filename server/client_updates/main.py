@@ -895,8 +895,12 @@ class Game:
                             else:
                                 self.users_search_active = False
                                 
-                            if getattr(self, 'online_users', []):
-                                for i, u in enumerate(self.online_users):
+                            filtered_users = getattr(self, 'online_users', [])
+                            s_txt = getattr(self, 'users_search_text', '').lower()
+                            if s_txt: filtered_users = [u for u in filtered_users if s_txt in u.get('username','').lower()]
+                            
+                            if filtered_users:
+                                for i, u in enumerate(filtered_users):
                                     y = 210 + i * 45
                                     btn = pygame.Rect(config.BASE_W//2 + 200, y, 100, 30)
                                     if btn.collidepoint(logical_mouse):
@@ -1055,10 +1059,13 @@ class Game:
                             else:
                                 is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
                                 if is_admin:
-                                    b_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
+                                    b_btn = pygame.Rect(config.BASE_W//2 - 100, 480, 200, 40)
+                                    d_btn = pygame.Rect(config.BASE_W//2 - 100, 530, 200, 40)
                                     if b_btn.collidepoint(logical_mouse):
                                         self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/ban", None, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
                                         self.audio.play_sfx('button.mp3')
+                                    elif d_btn.collidepoint(logical_mouse):
+                                        self.network._make_request("DELETE", f"/admin/users/{self.profile_data.get('username')}", None, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
                                         self.audio.play_sfx('button.mp3')
 
                 elif self.state == "SETTINGS":
@@ -1272,6 +1279,11 @@ class Game:
                         s_t = self.font.render(f"Stars: {self.profile_data.get('stars',0)}", True, config.YELLOW)
                         c_t = self.font.render(f"Creator Points: {self.profile_data.get('creator_points',0)}", True, config.GREEN)
                         self.screen.blit(u_t, (S(config.BASE_W//2) - u_t.get_width()//2, S(config.BASE_H//4 + 80)))
+                        
+                        if self.profile_data.get('is_admin'):
+                            admin_badge = self.font.render("ADMIN", True, config.RED)
+                            self.screen.blit(admin_badge, (S(config.BASE_W//2) + u_t.get_width()//2 + S(10), S(config.BASE_H//4 + 80)))
+
                         self.screen.blit(s_t, (S(config.BASE_W//2) - s_t.get_width()//2, S(config.BASE_H//4 + 120)))
                         self.screen.blit(c_t, (S(config.BASE_W//2) - c_t.get_width()//2, S(config.BASE_H//4 + 160)))
                         
@@ -1292,10 +1304,15 @@ class Game:
                         else:
                             is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
                             if is_admin:
-                                b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(500), S(200), S(40))
+                                b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(480), S(200), S(40))
                                 pygame.draw.rect(self.screen, config.ORANGE, b_btn, 0, S(5))
                                 bt = self.font.render("BAN USER", True, config.WHITE)
                                 self.screen.blit(bt, (b_btn.centerx - bt.get_width()//2, b_btn.centery - bt.get_height()//2))
+                                
+                                d_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(530), S(200), S(40))
+                                pygame.draw.rect(self.screen, config.RED, d_btn, 0, S(5))
+                                dt = self.font.render("DELETE USER", True, config.WHITE)
+                                self.screen.blit(dt, (d_btn.centerx - dt.get_width()//2, d_btn.centery - dt.get_height()//2))
                     else:
                         self.screen.blit(self.font.render(getattr(self, 'profile_msg', ""), True, config.GRAY), (S(config.BASE_W//2 - 100), S(config.BASE_H//2)))
                     self.screen.blit(self.font.render("Press ESC to Return", True, config.GRAY), (S(config.BASE_W//2 - 80), S(config.BASE_H - 60)))
@@ -1510,8 +1527,12 @@ class Game:
                     hint = self.font.render("Press Enter to Search", True, config.GRAY)
                     self.screen.blit(hint, (S(config.BASE_W//2) - hint.get_width()//2, S(200)))
                     
-                    if getattr(self, 'online_users', []):
-                        for i, u in enumerate(self.online_users):
+                    filtered_users = getattr(self, 'online_users', [])
+                    s_txt = getattr(self, 'users_search_text', '').lower()
+                    if s_txt: filtered_users = [u for u in filtered_users if s_txt in u.get('username','').lower()]
+                    
+                    if filtered_users:
+                        for i, u in enumerate(filtered_users):
                             y = 210 + i * 45
                             pygame.draw.rect(self.screen, (40, 40, 50), pygame.Rect(S(config.BASE_W//2 - 320), S(y-5), S(640), S(40)))
                             name_t = self.font.render(f"{u.get('username')}", True, config.WHITE)
