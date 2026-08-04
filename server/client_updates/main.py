@@ -14,7 +14,7 @@ from level_manager import Level
 from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
 
-CLIENT_VERSION = 1.4
+CLIENT_VERSION = 1.5
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -217,6 +217,28 @@ class Game:
         
         config.P_COLOR, config.P_CUBE_IDX, config.P_SHIP_IDX, config.P_BALL_IDX, config.P_WAVE_IDX = old_color, old_c_idx, old_s_idx, old_b_idx, old_w_idx
 
+    def draw_admin_stat_buttons(self):
+        cp_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(400), S(80), S(30))
+        cp_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(400), S(80), S(30))
+        star_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(440), S(80), S(30))
+        star_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(440), S(80), S(30))
+
+        pygame.draw.rect(self.screen, config.GREEN, cp_plus_btn, 0, S(5))
+        pygame.draw.rect(self.screen, config.RED, cp_minus_btn, 0, S(5))
+        pygame.draw.rect(self.screen, config.YELLOW, star_plus_btn, 0, S(5))
+        pygame.draw.rect(self.screen, config.RED, star_minus_btn, 0, S(5))
+
+        small_font = pygame.font.Font(None, S(24))
+        cp1_t = small_font.render("+1 CP", True, config.BLACK)
+        cp2_t = small_font.render("-1 CP", True, config.WHITE)
+        st1_t = small_font.render("+1 Star", True, config.BLACK)
+        st2_t = small_font.render("-1 Star", True, config.WHITE)
+
+        self.screen.blit(cp1_t, (cp_plus_btn.centerx - cp1_t.get_width()//2, cp_plus_btn.centery - cp1_t.get_height()//2))
+        self.screen.blit(cp2_t, (cp_minus_btn.centerx - cp2_t.get_width()//2, cp_minus_btn.centery - cp2_t.get_height()//2))
+        self.screen.blit(st1_t, (star_plus_btn.centerx - st1_t.get_width()//2, star_plus_btn.centery - st1_t.get_height()//2))
+        self.screen.blit(st2_t, (star_minus_btn.centerx - st2_t.get_width()//2, star_minus_btn.centery - st2_t.get_height()//2))
+
     def draw_icon_selector(self, mode, current_idx, x_pos, y_pos, label):
         lbl = self.font.render(label, True, config.WHITE)
         self.screen.blit(lbl, (S(x_pos) - lbl.get_width()//2, S(y_pos - 70)))
@@ -278,6 +300,7 @@ class Game:
                     config.P_SHIP_IDX = self.profile_data["icon_ship"]
                     config.P_BALL_IDX = self.profile_data["icon_ball"]
                     config.P_WAVE_IDX = self.profile_data["icon_wave"]
+                    config.P_UFO_IDX = self.profile_data.get("icon_ufo", 0)
                     try:
                         r, g, b = map(int, self.profile_data["color1"].split(','))
                         config.P_COLOR = (r, g, b)
@@ -287,6 +310,29 @@ class Game:
             else:
                 self.profile_msg = "User not found."
         self.network.get_user_profile(self.profile_user, cb)
+
+    def admin_adjust_stat(self, field, delta):
+        if not getattr(self, 'profile_data', None):
+            return
+        username = self.profile_data.get('username')
+        def cb(r):
+            if r.get("success") and getattr(self, 'profile_data', None) and self.profile_data.get('username') == username:
+                self.profile_data = r.get("data")
+            elif not r.get("success"):
+                self.profile_msg = "Failed to update stats."
+        self.network.admin_update_stats(username, {field: delta}, cb)
+
+    def admin_toggle_mod(self):
+        if not getattr(self, 'profile_data', None):
+            return
+        username = self.profile_data.get('username')
+        new_state = not self.profile_data.get('is_moderator', False)
+        def cb(r):
+            if r.get("success") and getattr(self, 'profile_data', None) and self.profile_data.get('username') == username:
+                self.profile_data = r.get("data")
+            elif not r.get("success"):
+                self.profile_msg = "Failed to update moderator status."
+        self.network.admin_set_user_mod(username, new_state, cb)
     
     def handle_rate_popup_click(self, logical_mouse):
         popup_rect = pygame.Rect(config.BASE_W//2 - 300, config.BASE_H//2 - 150, 600, 300)
@@ -309,35 +355,56 @@ class Game:
         else:
             self.active_popup = None
 
+    def _after_moderate(self, r):
+        self.state = 'ONLINE_HUB'
+        self.load_online_hub()
+        if getattr(self, 'my_profile_data', {}).get('is_admin'):
+            def cb_sent(res):
+                if res.get("success"): self.sent_levels = res.get("data", [])
+            self.network.get_sent_levels(callback=cb_sent)
+
     def handle_moderate_popup_click(self, logical_mouse):
         popup_rect = pygame.Rect(config.BASE_W//2 - 300, config.BASE_H//2 - 150, 600, 300)
         if popup_rect.collidepoint(logical_mouse):
-            is_admin = getattr(self, 'my_profile_data', {}).get('is_admin') or getattr(self, 'my_profile_data', {}).get('is_moderator') or (getattr(self, 'selected_level_data', {}).get('creator_name') == getattr(self.network, 'username', ''))
-            if is_admin:
+            is_true_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
+            is_mod_only = getattr(self, 'my_profile_data', {}).get('is_moderator') and not is_true_admin
+            if is_true_admin:
                 diffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
                 for i, d in enumerate(diffs):
                     bx = config.BASE_W//2 - 180 + (i%5)*70
                     by = config.BASE_H//2 - 60 + (i//5)*60
                     if pygame.Rect(bx, by, 60, 40).collidepoint(logical_mouse):
-                        self.network.moderate_level(self.popup_version_id, "published", d, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
+                        self.network.moderate_level(self.popup_version_id, "published", d, self._after_moderate)
                         self.active_popup = None
                         self.audio.play_sfx('button.mp3')
                         break
-                
+
                 del_btn = pygame.Rect(config.BASE_W//2 - 150, config.BASE_H//2 + 80, 300, 35)
                 if del_btn.collidepoint(logical_mouse):
-                    self.network.delete_level(self.popup_level_id, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
+                    self.network.delete_level(self.popup_level_id, self._after_moderate)
                     self.active_popup = None
                     self.audio.play_sfx('button.mp3')
+            elif is_mod_only:
+                # Moderators can only suggest a rating and send it to the admin —
+                # they cannot finalize a rating or reject a level themselves.
+                diffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                for i, d in enumerate(diffs):
+                    bx = config.BASE_W//2 - 180 + (i%5)*70
+                    by = config.BASE_H//2 - 60 + (i//5)*60
+                    if pygame.Rect(bx, by, 60, 40).collidepoint(logical_mouse):
+                        self.network.moderate_level(self.popup_version_id, "sent_to_admin", d, self._after_moderate)
+                        self.active_popup = None
+                        self.audio.play_sfx('button.mp3')
+                        break
             else:
                 send_btn = pygame.Rect(config.BASE_W//2 - 140, config.BASE_H//2 - 30, 280, 40)
                 rej_btn = pygame.Rect(config.BASE_W//2 - 140, config.BASE_H//2 + 30, 280, 40)
                 if send_btn.collidepoint(logical_mouse):
-                    self.network.moderate_level(self.popup_version_id, "sent_to_admin", 0, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
+                    self.network.moderate_level(self.popup_version_id, "sent_to_admin", 0, self._after_moderate)
                     self.active_popup = None
                     self.audio.play_sfx('button.mp3')
                 elif rej_btn.collidepoint(logical_mouse):
-                    self.network.moderate_level(self.popup_version_id, "rejected", 0, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
+                    self.network.moderate_level(self.popup_version_id, "rejected", 0, self._after_moderate)
                     self.active_popup = None
                     self.audio.play_sfx('button.mp3')
         else:
@@ -369,14 +436,15 @@ class Game:
                     draw_difficulty_face(self.screen, bx + 10, by, 35, i)
                 
             elif self.active_popup == "moderate":
-                is_admin = getattr(self, 'my_profile_data', {}).get('is_admin') or getattr(self, 'my_profile_data', {}).get('is_moderator') or (getattr(self, 'selected_level_data', {}).get('creator_name') == getattr(self.network, 'username', ''))
-                
+                is_true_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
+                is_mod_only = getattr(self, 'my_profile_data', {}).get('is_moderator') and not is_true_admin
+
                 diff_names = {1:"Easy", 2:"Normal", 3:"Hard", 4:"Harder", 5:"Insane", 6:"Easy Demon", 7:"Medium Demon", 8:"Hard Demon", 9:"Insane Demon", 10:"Extreme Demon"}
                 req_stars = getattr(self, 'selected_level_data', {}).get('requested_stars', 0)
                 if req_stars:
                     req_t = self.font.render(f"User requested: {diff_names.get(req_stars, 'Unknown')}", True, config.YELLOW)
                     self.screen.blit(req_t, (p_rect.centerx - req_t.get_width()//2, p_rect.y + S(45)))
-                if is_admin:
+                if is_true_admin:
                     t = self.title_font.render("Official Rating", True, config.WHITE)
                     self.screen.blit(t, (p_rect.centerx - t.get_width()//2, p_rect.y + S(20)))
                     diffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -386,22 +454,34 @@ class Game:
                         br = pygame.Rect(S(bx), S(by), S(60), S(40))
                         pygame.draw.rect(self.screen, (50, 50, 60), br, 0, S(5))
                         draw_difficulty_face(self.screen, bx + 10, by, 35, d)
-                    
+
                     del_btn = pygame.Rect(S(config.BASE_W//2 - 150), S(config.BASE_H//2 + 80), S(300), S(35))
                     pygame.draw.rect(self.screen, config.RED, del_btn, 0, S(5))
                     pygame.draw.rect(self.screen, config.WHITE, del_btn, max(1, S(2)), S(5))
                     dt = self.font.render("DELETE LEVEL FROM SERVER", True, config.WHITE)
                     self.screen.blit(dt, (del_btn.centerx - dt.get_width()//2, del_btn.centery - dt.get_height()//2))
+                elif is_mod_only:
+                    t = self.title_font.render("Suggest Rating & Send to Admin", True, config.WHITE)
+                    self.screen.blit(t, (p_rect.centerx - t.get_width()//2, p_rect.y + S(20)))
+                    hint = self.font.render("As a moderator you cannot finalize a rating — pick a suggestion to send.", True, config.GRAY)
+                    self.screen.blit(hint, (p_rect.centerx - hint.get_width()//2, p_rect.y + S(65)))
+                    diffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    for i, d in enumerate(diffs):
+                        bx = config.BASE_W//2 - 180 + (i%5)*70
+                        by = config.BASE_H//2 - 60 + (i//5)*60
+                        br = pygame.Rect(S(bx), S(by), S(60), S(40))
+                        pygame.draw.rect(self.screen, (50, 50, 60), br, 0, S(5))
+                        draw_difficulty_face(self.screen, bx + 10, by, 35, d)
                 else:
                     t = self.title_font.render("Moderate Level", True, config.WHITE)
                     self.screen.blit(t, (p_rect.centerx - t.get_width()//2, p_rect.y + S(20)))
-                
+
                     send_btn = pygame.Rect(S(config.BASE_W//2 - 140), S(config.BASE_H//2 - 30), S(280), S(40))
                     pygame.draw.rect(self.screen, config.GREEN, send_btn, 0, S(5))
                     pygame.draw.rect(self.screen, config.WHITE, send_btn, max(1, S(2)), S(5))
                     st = self.font.render("SEND TO ADMIN", True, config.BLACK)
                     self.screen.blit(st, (send_btn.centerx - st.get_width()//2, send_btn.centery - st.get_height()//2))
-                
+
                     rej_btn = pygame.Rect(S(config.BASE_W//2 - 140), S(config.BASE_H//2 + 30), S(280), S(40))
                     pygame.draw.rect(self.screen, config.RED, rej_btn, 0, S(5))
                     pygame.draw.rect(self.screen, config.WHITE, rej_btn, max(1, S(2)), S(5))
@@ -494,6 +574,7 @@ class Game:
     def run(self):
         running = True
         while running:
+            # Fix my_profile_data crash
             if not isinstance(getattr(self, 'my_profile_data', {}), dict):
                 self.my_profile_data = {}
             self.network.update()
@@ -580,7 +661,7 @@ class Game:
                                 if os.path.exists(la_path): os.remove(la_path)
                                 self.network.logout()
                                 self.state = "LOGIN"
-                            self.network._make_request("DELETE", "/users/me", None, cb_delete)
+                            self.network.delete_own_account(cb_delete)
                             self.active_popup = None
                             mouse_just_pressed = False
                             self.audio.play_sfx('button.mp3')
@@ -641,19 +722,39 @@ class Game:
                                     v = res.get("data", {}).get("version", 0)
                                     if v > CLIENT_VERSION:
                                         self.update_msg = "Update available! Downloading..."
-                                        def cb_dl(dl_res):
-                                            if dl_res.get("success"):
-                                                with open("main_new.py", "w", encoding="utf-8") as f:
-                                                    f.write(dl_res.get("text", ""))
-                                                updater_script = "import os, time, sys, subprocess\ntime.sleep(1)\ntry:\n    if os.path.exists('main.py'):\n        os.replace('main_new.py', 'main.py')\n    subprocess.Popen([sys.executable, 'main.py'])\nexcept Exception: pass\n"
-                                                with open("updater.py", "w") as f:
+                                        update_files = ["main.py", "player.py", "network.py"]
+
+                                        def download_next(idx):
+                                            if idx >= len(update_files):
+                                                updater_script = (
+                                                    "import os, time, sys, subprocess\n"
+                                                    "time.sleep(1)\n"
+                                                    "try:\n"
+                                                    "    for name in ['main.py', 'player.py', 'network.py']:\n"
+                                                    "        new_name = name[:-3] + '_new.py'\n"
+                                                    "        if os.path.exists(new_name):\n"
+                                                    "            os.replace(new_name, name)\n"
+                                                    "    subprocess.Popen([sys.executable, 'main.py'])\n"
+                                                    "except Exception: pass\n"
+                                                )
+                                                with open("updater.py", "w", encoding="utf-8") as f:
                                                     f.write(updater_script)
                                                 import subprocess
                                                 subprocess.Popen([sys.executable, "updater.py"])
                                                 import os; os._exit(0)
-                                            else:
-                                                self.update_msg = f"Failed: {dl_res.get('error')}"
-                                        self.network.download_update(cb_dl)
+                                                return
+                                            fname = update_files[idx]
+                                            def cb_dl(dl_res):
+                                                if dl_res.get("success"):
+                                                    new_name = fname[:-3] + "_new.py"
+                                                    with open(new_name, "w", encoding="utf-8") as f:
+                                                        f.write(dl_res.get("text", ""))
+                                                    self.update_msg = f"Update available! Downloading... ({idx+1}/{len(update_files)})"
+                                                    download_next(idx + 1)
+                                                else:
+                                                    self.update_msg = f"Failed to download {fname}: {dl_res.get('error')}"
+                                            self.network.download_update(cb_dl, filename=fname)
+                                        download_next(0)
                                     else:
                                         self.update_msg = "Game is up to date!"
                                 else:
@@ -806,6 +907,8 @@ class Game:
                             continue # skip rest of clicks
                             
                         tabs = ["levels", "create", "users"] if self.network.token else ["create"]
+                        if getattr(self, 'my_profile_data', {}).get('is_admin'):
+                            tabs = tabs + ["sent"]
                         for i, t in enumerate(tabs):
                             if len(tabs) == 1:
                                 rect = pygame.Rect(config.BASE_W//2 - 90, 80, 180, 40)
@@ -814,7 +917,11 @@ class Game:
                             if rect.collidepoint(logical_mouse):
                                 self.online_tab = t; self.audio.play_sfx('button.mp3')
                                 self.online_status_msg = ""
-                                if t == "levels" and hasattr(self, 'network'):
+                                if t == "sent" and hasattr(self, 'network'):
+                                    def cb_sent(res):
+                                        if res.get("success"): self.sent_levels = res.get("data", [])
+                                    self.network.get_sent_levels(callback=cb_sent)
+                                elif t == "levels" and hasattr(self, 'network'):
                                     def cb(res):
                                         if res.get("success"): self.online_levels = res.get("data", [])
                                     self.network.get_levels(callback=cb)
@@ -911,6 +1018,21 @@ class Game:
                                         self.load_profile(u.get('username'))
                                         self.audio.play_sfx('button.mp3')
                                         break
+
+                        elif getattr(self, 'online_tab', '') == "sent":
+                            for i, sl in enumerate(getattr(self, 'sent_levels', [])):
+                                row_rect = pygame.Rect(config.BASE_W//2 - 320, 210 + i * 55 - 5, 640, 45)
+                                if row_rect.collidepoint(logical_mouse):
+                                    self.popup_version_id = sl.get('version_id')
+                                    self.popup_level_id = sl.get('level_id')
+                                    self.selected_level_data = {
+                                        'title': sl.get('title'),
+                                        'creator_name': sl.get('creator_name'),
+                                        'requested_stars': sl.get('requested_stars'),
+                                    }
+                                    self.active_popup = "moderate"
+                                    self.audio.play_sfx('button.mp3')
+                                    break
 
                 elif self.state == "LEVEL_INFO":
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -1011,6 +1133,7 @@ class Game:
                                 "icon_ship": config.P_SHIP_IDX,
                                 "icon_ball": config.P_BALL_IDX,
                                 "icon_wave": config.P_WAVE_IDX,
+                                "icon_ufo": config.P_UFO_IDX,
                                 "color1": f"{config.P_COLOR[0]},{config.P_COLOR[1]},{config.P_COLOR[2]}",
                                 "color2": f"{config.P_COLOR2[0]},{config.P_COLOR2[1]},{config.P_COLOR2[2]}"
                             }
@@ -1029,10 +1152,11 @@ class Game:
                                 
                         if getattr(self, 'editing_icons', False):
                             icon_changed = False
-                            if pygame.Rect(config.BASE_W//2 - 150, 200, 50, 50).collidepoint(logical_mouse): config.P_CUBE_IDX = (config.P_CUBE_IDX + 1) % 5; icon_changed = True
-                            if pygame.Rect(config.BASE_W//2 - 50, 200, 50, 50).collidepoint(logical_mouse): config.P_SHIP_IDX = (config.P_SHIP_IDX + 1) % 5; icon_changed = True
-                            if pygame.Rect(config.BASE_W//2 + 50, 200, 50, 50).collidepoint(logical_mouse): config.P_BALL_IDX = (config.P_BALL_IDX + 1) % 5; icon_changed = True
-                            if pygame.Rect(config.BASE_W//2 + 150, 200, 50, 50).collidepoint(logical_mouse): config.P_WAVE_IDX = (config.P_WAVE_IDX + 1) % 5; icon_changed = True
+                            if pygame.Rect(config.BASE_W//2 - 150, 200, 50, 50).collidepoint(logical_mouse): config.P_CUBE_IDX = (config.P_CUBE_IDX + 1) % 8; icon_changed = True
+                            if pygame.Rect(config.BASE_W//2 - 50, 200, 50, 50).collidepoint(logical_mouse): config.P_SHIP_IDX = (config.P_SHIP_IDX + 1) % 8; icon_changed = True
+                            if pygame.Rect(config.BASE_W//2 + 50, 200, 50, 50).collidepoint(logical_mouse): config.P_BALL_IDX = (config.P_BALL_IDX + 1) % 8; icon_changed = True
+                            if pygame.Rect(config.BASE_W//2 + 150, 200, 50, 50).collidepoint(logical_mouse): config.P_WAVE_IDX = (config.P_WAVE_IDX + 1) % 8; icon_changed = True
+                            if pygame.Rect(config.BASE_W//2 + 250, 200, 50, 50).collidepoint(logical_mouse): config.P_UFO_IDX = (config.P_UFO_IDX + 1) % 8; icon_changed = True
                             for i, color in enumerate(config.PLAYER_COLORS):
                                 row, col = i // 8, i % 8
                                 c1_rect = pygame.Rect(config.BASE_W//2 - 400 + col*48, 620 + row*48, 40, 40)
@@ -1040,6 +1164,7 @@ class Game:
                                 if c1_rect.collidepoint(logical_mouse): config.P_COLOR = color; icon_changed = True
                                 if c2_rect.collidepoint(logical_mouse): config.P_COLOR2 = color; icon_changed = True
                             if icon_changed:
+                                import player as _player_mod; _player_mod._icon_cache.clear()
                                 prof = {
                                     "icon_cube": config.P_CUBE_IDX, "icon_ship": config.P_SHIP_IDX,
                                     "icon_ball": config.P_BALL_IDX, "icon_wave": config.P_WAVE_IDX,
@@ -1049,7 +1174,9 @@ class Game:
                                 self.network.update_icons(prof, lambda r: None)
                                 
                         if not getattr(self, 'editing_icons', False) and getattr(self, 'profile_data', None):
-                            if self.profile_data.get('username') == self.network.username:
+                            is_own = self.profile_data.get('username') == self.network.username
+                            is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
+                            if is_own:
                                 switch_btn = pygame.Rect(config.BASE_W//2 - 100, 450, 200, 40)
                                 del_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
                                 if switch_btn.collidepoint(logical_mouse):
@@ -1058,34 +1185,35 @@ class Game:
                                 elif del_btn.collidepoint(logical_mouse):
                                     self.active_popup = "delete_account_confirm"
                                     self.audio.play_sfx('button.mp3')
-                            else:
-                                is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
-                                if is_admin:
-                                    b_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
-                                    cp_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 400, 80, 30)
-                                    cp_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 400, 80, 30)
-                                    star_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 440, 80, 30)
-                                    star_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 440, 80, 30)
-                                    d_btn = pygame.Rect(config.BASE_W//2 - 100, 550, 200, 40)
-                                    
-                                    if b_btn.collidepoint(logical_mouse):
-                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/ban", None, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
-                                        self.audio.play_sfx('button.mp3')
-                                    elif cp_plus_btn.collidepoint(logical_mouse):
-                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"creator_points": 1}, lambda r: self.load_profile(self.profile_data.get('username')))
-                                        self.audio.play_sfx('button.mp3')
-                                    elif cp_minus_btn.collidepoint(logical_mouse):
-                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"creator_points": -1}, lambda r: self.load_profile(self.profile_data.get('username')))
-                                        self.audio.play_sfx('button.mp3')
-                                    elif star_plus_btn.collidepoint(logical_mouse):
-                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"user_stars": 1}, lambda r: self.load_profile(self.profile_data.get('username')))
-                                        self.audio.play_sfx('button.mp3')
-                                    elif star_minus_btn.collidepoint(logical_mouse):
-                                        self.network._make_request("POST", f"/admin/users/{self.profile_data.get('username')}/stats", {"user_stars": -1}, lambda r: self.load_profile(self.profile_data.get('username')))
-                                        self.audio.play_sfx('button.mp3')
-                                    elif d_btn.collidepoint(logical_mouse):
-                                        self.network._make_request("DELETE", f"/admin/users/{self.profile_data.get('username')}", None, lambda r: setattr(self, 'state', 'ONLINE_HUB') or self.load_online_hub())
-                                        self.audio.play_sfx('button.mp3')
+                            if not is_own or is_admin:
+                                cp_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 400, 80, 30)
+                                cp_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 400, 80, 30)
+                                star_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 440, 80, 30)
+                                star_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 440, 80, 30)
+
+                                if is_admin and cp_plus_btn.collidepoint(logical_mouse):
+                                    self.admin_adjust_stat("creator_points", 1)
+                                    self.audio.play_sfx('button.mp3')
+                                elif is_admin and cp_minus_btn.collidepoint(logical_mouse):
+                                    self.admin_adjust_stat("creator_points", -1)
+                                    self.audio.play_sfx('button.mp3')
+                                elif is_admin and star_plus_btn.collidepoint(logical_mouse):
+                                    self.admin_adjust_stat("user_stars", 1)
+                                    self.audio.play_sfx('button.mp3')
+                                elif is_admin and star_minus_btn.collidepoint(logical_mouse):
+                                    self.admin_adjust_stat("user_stars", -1)
+                                    self.audio.play_sfx('button.mp3')
+
+                            if not is_own and is_admin:
+                                b_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
+                                mod_btn = pygame.Rect(config.BASE_W//2 + 120, 480, 180, 34)
+                                if b_btn.collidepoint(logical_mouse):
+                                    username_to_ban = self.profile_data.get('username')
+                                    self.network.admin_ban_user(username_to_ban, self._after_moderate)
+                                    self.audio.play_sfx('button.mp3')
+                                elif mod_btn.collidepoint(logical_mouse):
+                                    self.admin_toggle_mod()
+                                    self.audio.play_sfx('button.mp3')
 
                 elif self.state == "SETTINGS":
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -1281,7 +1409,11 @@ class Game:
                     self.draw_dummy_player(self.screen, "ship", config.P_SHIP_IDX, config.P_COLOR, config.BASE_W//2 - 50, 200, 50)
                     self.draw_dummy_player(self.screen, "ball", config.P_BALL_IDX, config.P_COLOR, config.BASE_W//2 + 50, 200, 50)
                     self.draw_dummy_player(self.screen, "wave", config.P_WAVE_IDX, config.P_COLOR, config.BASE_W//2 + 150, 200, 50)
-                    
+                    self.draw_dummy_player(self.screen, "ufo", config.P_UFO_IDX, config.P_COLOR, config.BASE_W//2 + 250, 200, 50)
+                    for lbl, lbl_x in (("Cube", -150), ("Ship", -50), ("Ball", 50), ("Wave", 150), ("UFO", 250)):
+                        lt = self.font.render(lbl, True, config.GRAY)
+                        self.screen.blit(lt, (S(config.BASE_W//2 + lbl_x + 25) - lt.get_width()//2, S(255)))
+
                     for i, color in enumerate(config.PLAYER_COLORS):
                         row, col = i // 8, i % 8
                         c1_rect = pygame.Rect(S(config.BASE_W//2 - 400 + col*48), S(620 + row*48), S(40), S(40))
@@ -1306,11 +1438,13 @@ class Game:
                         self.screen.blit(s_t, (S(config.BASE_W//2) - s_t.get_width()//2, S(config.BASE_H//4 + 120)))
                         self.screen.blit(c_t, (S(config.BASE_W//2) - c_t.get_width()//2, S(config.BASE_H//4 + 160)))
                         
-                        if self.profile_data.get('username') == self.network.username:
+                        is_own = self.profile_data.get('username') == self.network.username
+                        is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
+                        if is_own:
                             pygame.draw.rect(self.screen, (40, 40, 50), pygame.Rect(S(config.BASE_W//2 - 40), S(100), S(80), S(80)))
                             self.draw_dummy_player(self.screen, "cube", config.P_CUBE_IDX, config.P_COLOR, config.BASE_W//2 - 20, 120, 40)
                             self.screen.blit(self.font.render("Click Avatar to Customize", True, config.GRAY), (S(config.BASE_W//2) - self.font.size("Click Avatar to Customize")[0]//2, S(200)))
-                            
+
                             switch_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(450), S(200), S(40))
                             pygame.draw.rect(self.screen, config.BLUE, switch_btn, 0, S(5))
                             st = self.font.render("SWITCH ACCOUNT", True, config.WHITE)
@@ -1321,39 +1455,21 @@ class Game:
                             dt = self.font.render("DELETE ACCOUNT", True, config.WHITE)
                             self.screen.blit(dt, (del_btn.centerx - dt.get_width()//2, del_btn.centery - dt.get_height()//2))
                         else:
-                            is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
                             if is_admin:
                                 b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(500), S(200), S(40))
                                 pygame.draw.rect(self.screen, config.ORANGE, b_btn, 0, S(5))
                                 bt = self.font.render("BAN USER", True, config.WHITE)
                                 self.screen.blit(bt, (b_btn.centerx - bt.get_width()//2, b_btn.centery - bt.get_height()//2))
-                                
-                                # CP and Stars buttons
-                                cp_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(400), S(80), S(30))
-                                cp_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(400), S(80), S(30))
-                                star_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(440), S(80), S(30))
-                                star_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(440), S(80), S(30))
-                                
-                                pygame.draw.rect(self.screen, config.GREEN, cp_plus_btn, 0, S(5))
-                                pygame.draw.rect(self.screen, config.RED, cp_minus_btn, 0, S(5))
-                                pygame.draw.rect(self.screen, config.YELLOW, star_plus_btn, 0, S(5))
-                                pygame.draw.rect(self.screen, config.RED, star_minus_btn, 0, S(5))
-                                
-                                small_font = pygame.font.Font(None, S(24))
-                                cp1_t = small_font.render("+1 CP", True, config.BLACK)
-                                cp2_t = small_font.render("-1 CP", True, config.WHITE)
-                                st1_t = small_font.render("+1 Star", True, config.BLACK)
-                                st2_t = small_font.render("-1 Star", True, config.WHITE)
-                                
-                                self.screen.blit(cp1_t, (cp_plus_btn.centerx - cp1_t.get_width()//2, cp_plus_btn.centery - cp1_t.get_height()//2))
-                                self.screen.blit(cp2_t, (cp_minus_btn.centerx - cp2_t.get_width()//2, cp_minus_btn.centery - cp2_t.get_height()//2))
-                                self.screen.blit(st1_t, (star_plus_btn.centerx - st1_t.get_width()//2, star_plus_btn.centery - st1_t.get_height()//2))
-                                self.screen.blit(st2_t, (star_minus_btn.centerx - st2_t.get_width()//2, star_minus_btn.centery - st2_t.get_height()//2))
-                                
-                                d_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(550), S(200), S(40))
-                                pygame.draw.rect(self.screen, config.RED, d_btn, 0, S(5))
-                                dt = self.font.render("DELETE USER", True, config.WHITE)
-                                self.screen.blit(dt, (d_btn.centerx - dt.get_width()//2, d_btn.centery - dt.get_height()//2))
+
+                                mod_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(480), S(180), S(34))
+                                pygame.draw.rect(self.screen, config.PURPLE, mod_btn, 0, S(5))
+                                is_mod = self.profile_data.get('is_moderator')
+                                mt = self.font.render("REMOVE MOD" if is_mod else "MAKE MOD", True, config.WHITE)
+                                self.screen.blit(mt, (mod_btn.centerx - mt.get_width()//2, mod_btn.centery - mt.get_height()//2))
+
+                        if is_admin:
+                            self.draw_admin_stat_buttons()
+
                     else:
                         self.screen.blit(self.font.render(getattr(self, 'profile_msg', ""), True, config.GRAY), (S(config.BASE_W//2 - 100), S(config.BASE_H//2)))
                     self.screen.blit(self.font.render("Press ESC to Return", True, config.GRAY), (S(config.BASE_W//2 - 80), S(config.BASE_H - 60)))
@@ -1443,6 +1559,8 @@ class Game:
                 self.screen.blit(title, (S(config.BASE_W//2) - title.get_width()//2, S(20)))
                 
                 tabs = ["levels", "create", "users"] if self.network.token else ["create"]
+                if getattr(self, 'my_profile_data', {}).get('is_admin'):
+                    tabs = tabs + ["sent"]
                 for i, t in enumerate(tabs):
                     if len(tabs) == 1:
                         btn = pygame.Rect(S(config.BASE_W//2 - 90), S(80), S(180), S(40))
@@ -1451,7 +1569,7 @@ class Game:
                     pygame.draw.rect(self.screen, config.DARK_GRAY if getattr(self, 'online_tab', '') == t else config.GRAY, btn)
                     txt = self.font.render(t.upper(), True, config.WHITE)
                     self.screen.blit(txt, (btn.centerx - txt.get_width()//2, btn.centery - txt.get_height()//2))
-                    
+
                 if getattr(self, 'online_tab', '') == "levels":
                     if getattr(self, 'online_levels', []):
                         filtered_levels = getattr(self, 'online_levels', [])
@@ -1589,6 +1707,29 @@ class Game:
                             pygame.draw.rect(self.screen, config.CYAN, btn, 0, S(5))
                             pt = self.font.render("PROFILE", True, config.BLACK)
                             self.screen.blit(pt, (btn.centerx - pt.get_width()//2, btn.centery - pt.get_height()//2))
+                    if getattr(self, 'online_status_msg', None):
+                        msg = self.font.render(self.online_status_msg, True, config.YELLOW)
+                        self.screen.blit(msg, (S(config.BASE_W//2) - msg.get_width()//2, S(150)))
+
+                elif getattr(self, 'online_tab', '') == "sent":
+                    diff_names = {1:"Easy", 2:"Normal", 3:"Hard", 4:"Harder", 5:"Insane", 6:"Easy Demon", 7:"Medium Demon", 8:"Hard Demon", 9:"Insane Demon", 10:"Extreme Demon"}
+                    sent_levels = getattr(self, 'sent_levels', [])
+                    if sent_levels:
+                        hint = self.font.render("Click a level to finalize its rating", True, config.GRAY)
+                        self.screen.blit(hint, (S(config.BASE_W//2) - hint.get_width()//2, S(150)))
+                        for i, sl in enumerate(sent_levels):
+                            y = 210 + i * 55
+                            pygame.draw.rect(self.screen, (40, 40, 50), pygame.Rect(S(config.BASE_W//2 - 320), S(y-5), S(640), S(45)))
+                            name_t = self.font.render(f"{sl.get('title','Unknown')} by {sl.get('creator_name','?')}", True, config.WHITE)
+                            self.screen.blit(name_t, (S(config.BASE_W//2 - 300), S(y + 2)))
+
+                            req = diff_names.get(sl.get('requested_stars', 0), 'None')
+                            sug = diff_names.get(sl.get('moderator_suggested_stars', 0), 'None')
+                            info_t = self.font.render(f"Requested: {req}  |  {sl.get('sent_by','?')} suggests: {sug}", True, config.YELLOW)
+                            self.screen.blit(info_t, (S(config.BASE_W//2 - 300), S(y + 20)))
+                    else:
+                        empty_t = self.font.render("No levels have been sent for review.", True, config.GRAY)
+                        self.screen.blit(empty_t, (S(config.BASE_W//2) - empty_t.get_width()//2, S(200)))
                     if getattr(self, 'online_status_msg', None):
                         msg = self.font.render(self.online_status_msg, True, config.YELLOW)
                         self.screen.blit(msg, (S(config.BASE_W//2) - msg.get_width()//2, S(150)))
