@@ -14,7 +14,7 @@ from level_manager import Level
 from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
 
-CLIENT_VERSION = 1.3
+CLIENT_VERSION = 1.4
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
