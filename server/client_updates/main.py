@@ -264,10 +264,12 @@ class Game:
                 if res.get("success"): self.online_levels = res.get("data", [])
                 else: self.online_status_msg = "Failed to load levels"
             self.network.get_levels(callback=cb)
-            if not getattr(self, 'my_profile_data', None):
-                def p_cb(res):
-                    if res.get("success"): self.my_profile_data = res.get("data")
-                self.network.get_user_profile(self.network.username, p_cb)
+            # Always refresh — my_profile_data drives admin/moderator permission
+            # checks, so it must never carry over stale data from a different
+            # account after a switch/login.
+            def p_cb(res):
+                if res.get("success"): self.my_profile_data = res.get("data")
+            self.network.get_user_profile(self.network.username, p_cb)
         self.load_levels_list(self.get_custom_levels_dir()) # For Drafts tab
         self.users_search_text = ""
         self.users_search_active = False
@@ -294,8 +296,12 @@ class Game:
             if res.get("success"):
                 self.profile_data = res.get("data")
                 self.profile_msg = ""
-                # If viewing own profile, parse colors
+                # If viewing own profile, parse colors and refresh the cached
+                # permission snapshot (my_profile_data) — it drives every admin/
+                # moderator check, so it must never be left over from a
+                # previously logged-in account after switching accounts.
                 if self.profile_data["username"] == self.network.username:
+                    self.my_profile_data = self.profile_data
                     config.P_CUBE_IDX = self.profile_data["icon_cube"]
                     config.P_SHIP_IDX = self.profile_data["icon_ship"]
                     config.P_BALL_IDX = self.profile_data["icon_ball"]
