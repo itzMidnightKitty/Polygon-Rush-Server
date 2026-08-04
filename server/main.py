@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse, FileResponse
 import os
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, inspect, text
 from typing import List, Optional
 import zlib
 import base64
@@ -11,6 +11,22 @@ from . import models, schemas, auth, database
 from .database import engine, get_db
 
 models.Base.metadata.create_all(bind=engine)
+
+def _auto_migrate():
+    """create_all() only creates missing tables, not missing columns on tables
+    that already exist in the deployed DB — add any newly-added columns here."""
+    inspector = inspect(engine)
+    existing_cols = {c['name'] for c in inspector.get_columns('level_versions')}
+    new_columns = {
+        'moderator_suggested_stars': 'INTEGER DEFAULT 0',
+        'sent_by_id': 'INTEGER',
+    }
+    with engine.begin() as conn:
+        for col_name, col_def in new_columns.items():
+            if col_name not in existing_cols:
+                conn.execute(text(f"ALTER TABLE level_versions ADD COLUMN {col_name} {col_def}"))
+
+_auto_migrate()
 
 app = FastAPI(title="Polygon Rush API")
 
@@ -154,34 +170,38 @@ def ban_user(username: str, db: Session = Depends(get_db), current_user: models.
     db.commit()
     return {"success": True}
 
-@app.post("/admin/users/{username}/stats")
+@app.post("/admin/users/{username}/stats", response_model=schemas.UserResponse)
 def admin_update_user_stats(username: str, stats: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not an admin")
-    
+
     target = db.query(models.User).filter(func.lower(models.User.username) == username.lower()).first()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
     if 'official_stars' in stats: target.official_stars = max(0, (target.official_stars or 0) + stats['official_stars'])
     if 'user_stars' in stats: target.user_stars = max(0, (target.user_stars or 0) + stats['user_stars'])
     if 'creator_points' in stats: target.creator_points = max(0, (target.creator_points or 0) + stats['creator_points'])
-    
-    db.commit()
-    return {"success": True, "message": "User stats updated"}
 
-@app.post("/admin/users/{username}/mod")
+    db.commit()
+    db.refresh(target)
+    if target.icon_ufo is None: target.icon_ufo = 0
+    return target
+
+@app.post("/admin/users/{username}/mod", response_model=schemas.UserResponse)
 def toggle_user_mod(username: str, data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not an admin")
-        
+
     target = db.query(models.User).filter(func.lower(models.User.username) == username.lower()).first()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
     target.is_moderator = data.get("is_moderator", False)
     db.commit()
-    return {"success": True, "is_moderator": target.is_moderator}
+    db.refresh(target)
+    if target.icon_ufo is None: target.icon_ufo = 0
+    return target
 
 
 # --- LEVEL ROUTES ---
@@ -399,19 +419,23 @@ def like_level(level_id: str, is_like: bool, db: Session = Depends(get_db), curr
     return {"success": True}
 
 @app.post("/level_versions/{version_id}/moderate")
-def moderate_level(version_id: int, status: str, stars: int, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+def moderate_level(version_id: int, status: str, stars: int = 0, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     version = db.query(models.LevelVersion).filter(models.LevelVersion.id == version_id).first()
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
-        
-    if not current_user.is_moderator and not current_user.is_admin:
-        if version.level.creator_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Not authorized")
-        
-        
+
+    is_owner = version.level.creator_id == current_user.id
+    if not current_user.is_moderator and not current_user.is_admin and not is_owner:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Only an admin (or the level's own creator) can finalize a rating. Moderators
+    # can only send a suggested rating to the admin via "sent_to_admin".
+    if status in ("published", "rejected") and not current_user.is_admin and not is_owner:
+        raise HTTPException(status_code=403, detail="Only an admin can finalize a rating")
+
     level = version.level
     was_published = version.is_current_published
-    
+
     if status == "published":
         version.stars = stars
         version.status = "published"
@@ -424,9 +448,32 @@ def moderate_level(version_id: int, status: str, stars: int, db: Session = Depen
         version.is_current_published = False
     elif status == "sent_to_admin":
         version.status = "sent_to_admin"
-        
+        version.moderator_suggested_stars = stars
+        version.sent_by_id = current_user.id
+
     db.commit()
     return {"success": True}
+
+@app.get("/admin/sent_levels")
+def get_sent_levels(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+
+    versions = db.query(models.LevelVersion).filter(models.LevelVersion.status == "sent_to_admin").order_by(models.LevelVersion.created_at.desc()).all()
+    results = []
+    for v in versions:
+        level = v.level
+        results.append({
+            "version_id": v.id,
+            "level_id": level.level_id if level else None,
+            "title": level.title if level else "Unknown",
+            "creator_name": level.creator.username if level and level.creator else "Unknown",
+            "requested_stars": v.requested_stars,
+            "moderator_suggested_stars": v.moderator_suggested_stars,
+            "sent_by": v.sent_by.username if v.sent_by else "Unknown",
+            "created_at": v.created_at,
+        })
+    return results
 
 @app.post("/level_versions/{version_id}/complete")
 def complete_level(version_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):

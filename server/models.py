@@ -29,6 +29,10 @@ class User(Base):
 
     created_at = Column(Integer, default=lambda: int(time.time()))
 
+    @property
+    def stars(self):
+        return (self.official_stars or 0) + (self.user_stars or 0)
+
     levels = relationship("Level", back_populates="creator")
     comments = relationship("Comment", back_populates="author")
     ratings = relationship("Rating", back_populates="user")
@@ -56,17 +60,20 @@ class LevelVersion(Base):
     version_number = Column(Integer, default=1)
     is_current_published = Column(Boolean, default=False)
     data = Column(Text)
-    status = Column(String, default="pending") # pending, published, rejected
+    status = Column(String, default="pending") # pending, published, rejected, sent_to_admin
     stars = Column(Integer, default=0) # Assigned by admin
-    requested_stars = Column(Integer, default=0)
+    requested_stars = Column(Integer, default=0) # Requested by the uploader
+    moderator_suggested_stars = Column(Integer, default=0) # Suggested by a moderator when sending to admin
+    sent_by_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Moderator who sent this to the admin
     created_at = Column(Integer, default=lambda: int(time.time()))
-    
+
     # Stats specific to this version
     plays = Column(Integer, default=0)
 
     level = relationship("Level", back_populates="versions")
     ratings = relationship("Rating", back_populates="version")
     completions = relationship("LevelCompletion", back_populates="version")
+    sent_by = relationship("User", foreign_keys=[sent_by_id])
 
 class LevelCompletion(Base):
     __tablename__ = "level_completions"

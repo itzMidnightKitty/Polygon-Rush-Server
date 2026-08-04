@@ -12,6 +12,7 @@ class UserResponse(BaseModel):
     is_moderator: bool
     official_stars: int
     user_stars: int
+    stars: int
     creator_points: int
     icon_cube: int
     icon_ship: int
