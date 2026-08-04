@@ -447,9 +447,14 @@ class Game:
 
                 diff_names = {1:"Easy", 2:"Normal", 3:"Hard", 4:"Harder", 5:"Insane", 6:"Easy Demon", 7:"Medium Demon", 8:"Hard Demon", 9:"Insane Demon", 10:"Extreme Demon"}
                 req_stars = getattr(self, 'selected_level_data', {}).get('requested_stars', 0)
+                mod_suggested = getattr(self, 'selected_level_data', {}).get('moderator_suggested_stars', 0)
+                sent_by = getattr(self, 'selected_level_data', {}).get('sent_by')
                 if req_stars:
                     req_t = self.font.render(f"User requested: {diff_names.get(req_stars, 'Unknown')}", True, config.YELLOW)
                     self.screen.blit(req_t, (p_rect.centerx - req_t.get_width()//2, p_rect.y + S(45)))
+                if is_true_admin and mod_suggested:
+                    sug_t = self.font.render(f"{sent_by or 'Moderator'} suggests: {diff_names.get(mod_suggested, 'Unknown')}", True, config.CYAN)
+                    self.screen.blit(sug_t, (p_rect.centerx - sug_t.get_width()//2, p_rect.y + S(65)))
                 if is_true_admin:
                     t = self.title_font.render("Official Rating", True, config.WHITE)
                     self.screen.blit(t, (p_rect.centerx - t.get_width()//2, p_rect.y + S(20)))
@@ -1029,14 +1034,26 @@ class Game:
                             for i, sl in enumerate(getattr(self, 'sent_levels', [])):
                                 row_rect = pygame.Rect(config.BASE_W//2 - 320, 210 + i * 55 - 5, 640, 45)
                                 if row_rect.collidepoint(logical_mouse):
-                                    self.popup_version_id = sl.get('version_id')
-                                    self.popup_level_id = sl.get('level_id')
+                                    # Go to the normal level page (not straight to the popup) so
+                                    # Play/Practice are available to test the level before rating.
                                     self.selected_level_data = {
+                                        'level_id': sl.get('level_id'),
                                         'title': sl.get('title'),
                                         'creator_name': sl.get('creator_name'),
                                         'requested_stars': sl.get('requested_stars'),
+                                        'moderator_suggested_stars': sl.get('moderator_suggested_stars'),
+                                        'sent_by': sl.get('sent_by'),
+                                        'published_version_id': sl.get('version_id'),
+                                        'stars': 0,
+                                        'plays': 0,
+                                        'community_rating': 0,
+                                        'ratings_count': 0,
+                                        'likes': 0,
+                                        'dislikes': 0,
+                                        'has_reacted': None,
+                                        'has_rated': False,
                                     }
-                                    self.active_popup = "moderate"
+                                    self.state = "LEVEL_INFO"
                                     self.audio.play_sfx('button.mp3')
                                     break
 

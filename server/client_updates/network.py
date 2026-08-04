@@ -46,13 +46,18 @@ class NetworkManager:
 
     def update(self):
         """Call this every frame to process callbacks from network threads"""
-        try:
-            while True:
+        while True:
+            try:
                 callback, result = self.result_queue.get_nowait()
-                if callback:
+            except queue.Empty:
+                break
+            if callback:
+                try:
                     callback(result)
-        except queue.Empty:
-            pass
+                except Exception as e:
+                    import traceback
+                    print(f"Network callback error: {e}")
+                    traceback.print_exc()
 
     def register(self, username, password, callback):
         t = threading.Thread(target=self._make_request, args=("POST", "/register", {"username": username, "password": password}, callback))
