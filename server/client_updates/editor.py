@@ -226,10 +226,9 @@ class Editor:
                 if not box.collidepoint(logical_mouse):
                     self.options_active = False; return
                 if pygame.Rect(config.BASE_W//2 - 200, 160, 400, 40).collidepoint(logical_mouse):
-                    if self.level.start_gamemode == "cube": self.level.start_gamemode = "ship"
-                    elif self.level.start_gamemode == "ship": self.level.start_gamemode = "ball"
-                    elif self.level.start_gamemode == "ball": self.level.start_gamemode = "wave"
-                    else: self.level.start_gamemode = "cube"
+                    gamemode_cycle = ["cube", "ship", "ball", "wave", "ufo"]
+                    idx = gamemode_cycle.index(self.level.start_gamemode) if self.level.start_gamemode in gamemode_cycle else 0
+                    self.level.start_gamemode = gamemode_cycle[(idx + 1) % len(gamemode_cycle)]
                     self.unsaved_changes = True
                 for i in range(6):
                     if pygame.Rect(config.BASE_W//2 - 270 + i * 90, 250, 70, 70).collidepoint(logical_mouse):

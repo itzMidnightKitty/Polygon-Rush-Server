@@ -151,7 +151,7 @@ OBJ_NAMES = {
     OBJ_PORTAL_BALL: "Ball Portal", OBJ_PORTAL_UFO: "UFO Portal", OBJ_PORTAL_WAVE: "Wave Portal", OBJ_END_TRIGGER: "End Trigger", 
     OBJ_PAD_PURPLE: "Purple Pad", OBJ_ORB_PURPLE: "Purple Orb", OBJ_GROUND_COLOR_TRIGGER: "Ground Color Trigger", 
     OBJ_SAW_2: "Sawblade 1.5x", OBJ_SAW_3: "Sawblade 3x3",
-    OBJ_BLOCK_FADED: "Faded Block", OBJ_BLOCK_BRICK: "Brick Block", 
+    OBJ_BLOCK_FADED: "Checker Block", OBJ_BLOCK_BRICK: "Brick Block", 
     OBJ_BLOCK_BEVEL: "Bevel Block", OBJ_BLOCK_GRID: "Grid Block",
     OBJ_GROUND_SPIKE: "Ground Spike", 
     OBJ_PULSEROD_1: "Pulserod (1x)", OBJ_PULSEROD_2: "Pulserod (2x)", OBJ_PULSEROD_3: "Pulserod (3x)",
@@ -166,7 +166,7 @@ OBJ_NAMES = {
     OBJ_OUTLINE_LINE: "Outline: Line", OBJ_OUTLINE_CORNER_PIXEL: "Outline: Corner Pixel",
     OBJ_OUTLINE_3SIDE: "Outline: 3 Sides", OBJ_OUTLINE_OPPOSITE: "Outline: Opposite Sides",
     OBJ_OUTLINE_CORNER2: "Outline: Corner Two",
-    OBJ_BLOCK_DOTS: "Dotted Block", OBJ_BLOCK_STRIPES: "Striped Block",
+    OBJ_BLOCK_DOTS: "Dotted Block", OBJ_BLOCK_STRIPES: "Panel Block",
     OBJ_BLOCK_CROSS: "Cross Block", OBJ_BLOCK_CIRCLE: "Circle Block",
 }
 

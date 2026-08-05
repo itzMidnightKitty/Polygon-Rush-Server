@@ -7,6 +7,12 @@ def sort_for_draw(objects):
     Stable sort keeps relative insertion order within the same layer."""
     return sorted(objects, key=lambda o: getattr(o, 'layer', 0), reverse=True)
 
+TILEABLE_TYPES = (config.OBJ_BLOCK, config.OBJ_HALF_BLOCK, config.OBJ_BLOCK_FADED, config.OBJ_BLOCK_BRICK,
+                   config.OBJ_BLOCK_GRID, config.OBJ_BLOCK_BEVEL, config.OBJ_BLOCK_DOTS, config.OBJ_BLOCK_STRIPES,
+                   config.OBJ_BLOCK_CROSS, config.OBJ_BLOCK_CIRCLE,
+                   config.OBJ_OUTLINE_LINE, config.OBJ_OUTLINE_CORNER_PIXEL, config.OBJ_OUTLINE_3SIDE,
+                   config.OBJ_OUTLINE_OPPOSITE, config.OBJ_OUTLINE_CORNER2)
+
 class GameObject:
     def __init__(self, type, x, y, rotation=0, color_idx=0, flip_x=False, flip_y=False, bpm=60, layer=0, **kwargs):
         self.type = type
@@ -23,8 +29,11 @@ class GameObject:
         self.update_rect()
 
     def is_solid(self):
-        return self.type in (config.OBJ_BLOCK, config.OBJ_HALF_BLOCK, config.OBJ_BLOCK_FADED, config.OBJ_BLOCK_BRICK, config.OBJ_BLOCK_GRID, config.OBJ_BLOCK_BEVEL,
-                              config.OBJ_BLOCK_DOTS, config.OBJ_BLOCK_STRIPES, config.OBJ_BLOCK_CROSS, config.OBJ_BLOCK_CIRCLE)
+        # Only Half Block and the outline pieces collide -- the rest of the
+        # Blocks category is decorative fill, meant to sit behind an outline
+        # piece rather than provide its own collision.
+        return self.type in (config.OBJ_HALF_BLOCK, config.OBJ_OUTLINE_LINE, config.OBJ_OUTLINE_CORNER_PIXEL,
+                              config.OBJ_OUTLINE_3SIDE, config.OBJ_OUTLINE_OPPOSITE, config.OBJ_OUTLINE_CORNER2)
 
     def is_deadly(self):
         return self.type in (config.OBJ_SPIKE, config.OBJ_HALF_SPIKE, config.OBJ_GROUND_SPIKE, config.OBJ_SAW, config.OBJ_SAW_2, config.OBJ_SAW_3)
@@ -43,6 +52,18 @@ class GameObject:
             elif self.rotation == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
             elif self.rotation == 270: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
             else: oy = self.y + config.GRID_SIZE // 2
+        elif self.type == config.OBJ_OUTLINE_LINE:
+            t = 10
+            if self.rotation == 90: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y, t, config.GRID_SIZE
+            elif self.rotation == 180: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - t, config.GRID_SIZE, t
+            elif self.rotation == 270: ox, oy, w, h = self.x, self.y, t, config.GRID_SIZE
+            else: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, t
+        elif self.type == config.OBJ_OUTLINE_CORNER_PIXEL:
+            t = 10
+            if self.rotation == 90: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y, t, t
+            elif self.rotation == 180: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y + config.GRID_SIZE - t, t, t
+            elif self.rotation == 270: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - t, t, t
+            else: ox, oy, w, h = self.x, self.y, t, t
         elif self.type == config.OBJ_SPIKE:
             if self.rotation == 0: ox, oy, w, h = self.x + 6, self.y + 10, config.GRID_SIZE - 12, config.GRID_SIZE - 10
             elif self.rotation == 90: ox, oy, w, h = self.x, self.y + 6, config.GRID_SIZE - 10, config.GRID_SIZE - 12
@@ -104,7 +125,7 @@ class GameObject:
 
         self.rect = pygame.Rect(ox, oy, w, h)
 
-    def get_surface(self, zoom=1.0, highlight=False):
+    def get_surface(self, zoom=1.0, highlight=False, size_override=None):
         if self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP):
             sw, sh = config.GRID_SIZE, config.GRID_SIZE * 3
         elif self.type == config.OBJ_PULSEROD_2: sw, sh = config.GRID_SIZE, config.GRID_SIZE * 2
@@ -117,10 +138,16 @@ class GameObject:
         elif self.type == config.OBJ_CLOUD_1: sw, sh = config.GRID_SIZE * 2, config.GRID_SIZE
         elif self.type == config.OBJ_CLOUD_2: sw, sh = int(config.GRID_SIZE * 1.5), config.GRID_SIZE
         else: sw, sh = config.GRID_SIZE, config.GRID_SIZE
-            
+
         z_scale = zoom * config.get_scale()
-        w, h = max(1, int(sw * z_scale)), max(1, int(sh * z_scale))
-        gz = int(config.GRID_SIZE * z_scale)
+        if size_override is not None:
+            # Pixel-exact size derived by the caller from neighboring cell boundaries,
+            # so adjacent tiles share identical edges with no rounding gap between them.
+            w, h = size_override
+            gz = w
+        else:
+            w, h = max(1, int(sw * z_scale)), max(1, int(sh * z_scale))
+            gz = int(config.GRID_SIZE * z_scale)
         
         if self.type in (config.OBJ_SAW, config.OBJ_SAW_2, config.OBJ_SAW_3, config.OBJ_GEAR_L, config.OBJ_GEAR_M, config.OBJ_GEAR_S):
             if w % 2 != 0: w += 1
@@ -141,16 +168,20 @@ class GameObject:
         elif self.type == config.OBJ_HALF_BLOCK:
             pygame.draw.rect(obj_surf, base_color, (0, gz//2, gz, gz//2))
             pygame.draw.rect(obj_surf, outline_color, (0, gz//2, gz, gz//2), lw)
-        elif self.type == config.OBJ_BLOCK_FADED:
-            for i in range(5):
-                alpha = 255 - (i * 50)
-                rect_color = (*base_color[:3], max(0, alpha))
-                offset = int(i * (gz / 10))
-                size = int(gz - 2 * offset)
-                if size > 0:
-                    temp_surf = pygame.Surface((size, size), pygame.SRCALPHA)
-                    pygame.draw.rect(temp_surf, rect_color, (0, 0, size, size))
-                    obj_surf.blit(temp_surf, (offset, offset))
+        elif self.type == config.OBJ_BLOCK_FADED:  # "Checker Block"
+            pygame.draw.rect(obj_surf, base_color, (0, 0, w, h))
+            dark_c = (max(0, base_color[0]-45), max(0, base_color[1]-45), max(0, base_color[2]-45))
+            n = 4
+            cell_w = max(1, gz // n)
+            # Index squares by absolute grid position (not local surface coords) so
+            # the checker parity carries over exactly between adjacent cells instead
+            # of each block restarting its own pattern at the edge.
+            col0 = round(self.x / config.GRID_SIZE) * n
+            row0 = round(self.y / config.GRID_SIZE) * n
+            for i in range(n):
+                for j in range(n):
+                    if (col0 + i + row0 + j) % 2 == 0:
+                        pygame.draw.rect(obj_surf, dark_c, (i*cell_w, j*cell_w, cell_w, cell_w))
         elif self.type == config.OBJ_BLOCK_BRICK:
             pygame.draw.rect(obj_surf, base_color, (0, 0, gz, gz))
             dark_brick = (max(0, base_color[0]-60), max(0, base_color[1]-60), max(0, base_color[2]-60))
@@ -188,12 +219,14 @@ class GameObject:
             for i in range(1, 4):
                 for j in range(1, 4):
                     pygame.draw.circle(obj_surf, dot_c, (i*step, j*step), max(1, gz//14))
-        elif self.type == config.OBJ_BLOCK_STRIPES:
-            pygame.draw.rect(obj_surf, base_color, (0, 0, gz, gz))
-            stripe_c = (max(0, base_color[0]-50), max(0, base_color[1]-50), max(0, base_color[2]-50))
-            stripe_w = max(1, int(4*z_scale))
-            for off in range(-gz, gz*2, max(1, gz//4)):
-                pygame.draw.line(obj_surf, stripe_c, (off, gz), (off+gz, 0), stripe_w)
+        elif self.type == config.OBJ_BLOCK_STRIPES:  # "Panel Block"
+            pygame.draw.rect(obj_surf, base_color, (0, 0, w, h))
+            dark_c = (max(0, base_color[0]-45), max(0, base_color[1]-45), max(0, base_color[2]-45))
+            n = 4  # even count: alternation naturally continues across a cell boundary, no phase math needed
+            band_h = max(1, h // n)
+            for i in range(n):
+                if i % 2 == 1:
+                    pygame.draw.rect(obj_surf, dark_c, (0, i*band_h, w, band_h))
         elif self.type == config.OBJ_BLOCK_CROSS:
             pygame.draw.rect(obj_surf, base_color, (0, 0, gz, gz))
             cross_c = (max(0, base_color[0]-50), max(0, base_color[1]-50), max(0, base_color[2]-50))
@@ -208,8 +241,8 @@ class GameObject:
             lw2 = max(2, int(5 * z_scale))
             pygame.draw.line(obj_surf, base_color, (0, lw2//2), (gz, lw2//2), lw2)
         elif self.type == config.OBJ_OUTLINE_CORNER_PIXEL:
-            px = max(3, int(gz * 0.18))
-            pygame.draw.rect(obj_surf, base_color, (0, 0, px, px))
+            lw2 = max(2, int(5 * z_scale))
+            pygame.draw.rect(obj_surf, base_color, (0, 0, lw2, lw2))
         elif self.type == config.OBJ_OUTLINE_3SIDE:
             lw2 = max(2, int(5 * z_scale))
             pygame.draw.line(obj_surf, base_color, (0, lw2//2), (gz, lw2//2), lw2)
@@ -392,7 +425,14 @@ class GameObject:
         if draw_x < -config.S(config.GRID_SIZE * 4 * zoom) or draw_x > config.RENDER_W: return
         if draw_y < -config.S(config.GRID_SIZE * 4 * zoom) or draw_y > config.RENDER_H: return
 
-        obj_surf = self.get_surface(zoom, highlight)
+        size_override = None
+        if self.type in TILEABLE_TYPES:
+            z = zoom * config.get_scale()
+            x1 = int((dx + config.GRID_SIZE - scroll_x) * z)
+            y1 = int((dy + config.GRID_SIZE - scroll_y) * z)
+            size_override = (max(1, x1 - draw_x), max(1, y1 - draw_y))
+
+        obj_surf = self.get_surface(zoom, highlight, size_override=size_override)
 
         if self.type in (config.OBJ_SAW, config.OBJ_SAW_2, config.OBJ_SAW_3, config.OBJ_GEAR_L, config.OBJ_GEAR_M, config.OBJ_GEAR_S):
             time_rot = (pygame.time.get_ticks() / 3.0) % 360
