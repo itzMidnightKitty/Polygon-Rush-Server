@@ -533,11 +533,11 @@ def get_comments(level_id: str, db: Session = Depends(get_db)):
 # --- UPDATER ROUTES ---
 @app.get("/version")
 def check_version():
-    return {"success": True, "version": 1.5}
+    return {"success": True, "version": 1.6}
 
 @app.get("/download_update")
 def download_update(file: str = "main.py"):
-    allowed_files = {"main.py", "player.py", "network.py"}
+    allowed_files = {"main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py"}
     if file not in allowed_files:
         raise HTTPException(status_code=400, detail="Invalid file")
     path = f"server/client_updates/{file}"

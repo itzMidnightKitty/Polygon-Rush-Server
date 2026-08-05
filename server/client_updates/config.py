@@ -41,9 +41,15 @@ GRAY = (120, 120, 120)
 DARK_GRAY = (40, 40, 45)
 LIGHT_GRAY = (190, 190, 190)
 
-# 24 Colors for levels / blocks (Index 8 is Pure White for default Deco)
+# Colors for levels / blocks (Index 8 is Pure White for default Deco).
+# The original 24 keep their indices forever -- saved levels reference colors
+# by index, so existing entries must never move or change. New colors are
+# only ever appended after them; display order (see UI_COLOR_ORDER) is a
+# separate concern from storage index.
+import colorsys
+
 BG_COLORS = [
-    (40, 100, 255), (255, 50, 100), (50, 220, 100), (150, 50, 255), 
+    (40, 100, 255), (255, 50, 100), (50, 220, 100), (150, 50, 255),
     (255, 150, 20), (20, 200, 200), (255, 220, 40), (45, 45, 50),
     (255, 255, 255), (15, 15, 15), (128, 0, 0), (0, 128, 0),
     (0, 0, 128), (128, 128, 0), (128, 0, 128), (0, 128, 128),
@@ -51,7 +57,28 @@ BG_COLORS = [
     (255, 100, 255), (100, 255, 255), (255, 150, 150), (150, 255, 150)
 ]
 
-UI_COLOR_ORDER = sorted(range(len(BG_COLORS)), key=lambda i: sum(BG_COLORS[i]), reverse=True)
+def _hue_wheel(n_hues, s, v):
+    out = []
+    for i in range(n_hues):
+        r, g, b = colorsys.hsv_to_rgb(i / n_hues, s, v)
+        out.append((int(r * 255), int(g * 255), int(b * 255)))
+    return out
+
+# 24 hues x 3 tiers (vivid / pastel / deep) = 72 more colors, plus a 9-step
+# grayscale ramp, for 105 total -- well over the old 24-color cap.
+BG_COLORS += _hue_wheel(24, 1.0, 1.0)
+BG_COLORS += _hue_wheel(24, 0.45, 1.0)
+BG_COLORS += _hue_wheel(24, 1.0, 0.55)
+BG_COLORS += [(v, v, v) for v in (0, 32, 64, 96, 128, 160, 192, 224, 255)]
+
+def _color_sort_key(idx):
+    r, g, b = BG_COLORS[idx]
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    if s < 0.08:
+        return (1, v)  # group grayscale colors after the chromatic wheel, dark to light
+    return (0, h, v)
+
+UI_COLOR_ORDER = sorted(range(len(BG_COLORS)), key=_color_sort_key)
 
 PLAYER_COLORS = [
     (255, 255, 255), (190, 190, 190), (120, 120, 120), (45, 45, 50), (15, 15, 15),
@@ -107,6 +134,14 @@ OBJ_CLOUD_1, OBJ_CLOUD_2 = 41, 42
 OBJ_PULSE_CIRCLE, OBJ_PULSE_HOLLOW, OBJ_PULSE_HEART, OBJ_PULSE_DIAMOND, OBJ_PULSE_STAR, OBJ_PULSE_NOTE = 43, 44, 45, 46, 47, 48
 OBJ_SPEED_05X, OBJ_SPEED_1X, OBJ_SPEED_2X, OBJ_SPEED_3X, OBJ_SPEED_4X = 49, 50, 51, 52, 53
 
+# Outline blocks: thin border pieces meant to be layered over a detail block
+# (usually a contrasting color) to fake a bordered-block look. Rotatable --
+# rotation picks which edge/corner the piece occupies.
+OBJ_OUTLINE_LINE, OBJ_OUTLINE_CORNER_PIXEL, OBJ_OUTLINE_3SIDE, OBJ_OUTLINE_OPPOSITE, OBJ_OUTLINE_CORNER2 = 54, 55, 56, 57, 58
+
+# More detail block variants (solid, no border, textured fill)
+OBJ_BLOCK_DOTS, OBJ_BLOCK_STRIPES, OBJ_BLOCK_CROSS, OBJ_BLOCK_CIRCLE = 59, 60, 61, 62
+
 
 OBJ_NAMES = {
     OBJ_BLOCK: "Solid Block", OBJ_HALF_BLOCK: "Half Block", OBJ_SPIKE: "Spike", OBJ_HALF_SPIKE: "Half Spike",
@@ -128,10 +163,17 @@ OBJ_NAMES = {
     OBJ_PULSE_DIAMOND: "Pulse Diamond", OBJ_PULSE_STAR: "Pulse Star", OBJ_PULSE_NOTE: "Pulse Note",
     OBJ_SPEED_05X: "Speed 0.5x", OBJ_SPEED_1X: "Speed 1x", OBJ_SPEED_2X: "Speed 2x",
     OBJ_SPEED_3X: "Speed 3x", OBJ_SPEED_4X: "Speed 4x",
+    OBJ_OUTLINE_LINE: "Outline: Line", OBJ_OUTLINE_CORNER_PIXEL: "Outline: Corner Pixel",
+    OBJ_OUTLINE_3SIDE: "Outline: 3 Sides", OBJ_OUTLINE_OPPOSITE: "Outline: Opposite Sides",
+    OBJ_OUTLINE_CORNER2: "Outline: Corner Two",
+    OBJ_BLOCK_DOTS: "Dotted Block", OBJ_BLOCK_STRIPES: "Striped Block",
+    OBJ_BLOCK_CROSS: "Cross Block", OBJ_BLOCK_CIRCLE: "Circle Block",
 }
 
 CATEGORIES = {
-    "Blocks": [OBJ_BLOCK, OBJ_HALF_BLOCK, OBJ_BLOCK_FADED, OBJ_BLOCK_BRICK, OBJ_BLOCK_BEVEL, OBJ_BLOCK_GRID],
+    "Blocks": [OBJ_BLOCK, OBJ_HALF_BLOCK, OBJ_BLOCK_FADED, OBJ_BLOCK_BRICK, OBJ_BLOCK_BEVEL, OBJ_BLOCK_GRID,
+               OBJ_BLOCK_DOTS, OBJ_BLOCK_STRIPES, OBJ_BLOCK_CROSS, OBJ_BLOCK_CIRCLE,
+               OBJ_OUTLINE_LINE, OBJ_OUTLINE_CORNER_PIXEL, OBJ_OUTLINE_3SIDE, OBJ_OUTLINE_OPPOSITE, OBJ_OUTLINE_CORNER2],
     "Dangers": [OBJ_SPIKE, OBJ_HALF_SPIKE, OBJ_GROUND_SPIKE, OBJ_SAW_2, OBJ_SAW, OBJ_SAW_3],
     "Gameplay": [OBJ_PORTAL_CUBE, OBJ_PORTAL_SHIP, OBJ_PORTAL_BALL, OBJ_PORTAL_UFO, OBJ_PORTAL_WAVE, OBJ_PORTAL_GRAV_DOWN, OBJ_PORTAL_GRAV_UP, OBJ_PAD_YELLOW, OBJ_ORB_YELLOW, OBJ_PAD_PURPLE, OBJ_ORB_PURPLE, OBJ_PAD_BLUE, OBJ_ORB_BLUE, OBJ_SPAWN, OBJ_COLOR_TRIGGER, OBJ_GROUND_COLOR_TRIGGER, OBJ_END_TRIGGER],
     "Decor": [OBJ_GEAR_L, OBJ_GEAR_M, OBJ_GEAR_S, OBJ_DECO_SPIKE_L, OBJ_DECO_SPIKE_M, OBJ_DECO_CHAIN, OBJ_CLOUD_1, OBJ_CLOUD_2, OBJ_PULSEROD_1, OBJ_PULSEROD_2, OBJ_PULSEROD_3],
@@ -139,3 +181,6 @@ CATEGORIES = {
 }
 
 NON_ROTATABLE = [OBJ_COLOR_TRIGGER, OBJ_GROUND_COLOR_TRIGGER, OBJ_END_TRIGGER, OBJ_BLOCK, OBJ_BLOCK_FADED, OBJ_BLOCK_BRICK, OBJ_ORB_YELLOW, OBJ_ORB_PURPLE, OBJ_ORB_BLUE, OBJ_SPAWN, OBJ_SAW, OBJ_SAW_2, OBJ_SAW_3, OBJ_CLOUD_1, OBJ_CLOUD_2, OBJ_PULSE_CIRCLE, OBJ_PULSE_HOLLOW, OBJ_PULSE_HEART, OBJ_PULSE_DIAMOND, OBJ_PULSE_STAR, OBJ_PULSE_NOTE, OBJ_SPEED_05X, OBJ_SPEED_1X, OBJ_SPEED_2X, OBJ_SPEED_3X, OBJ_SPEED_4X]
+
+# Layering: layer 0 draws last (on top), layer MAX_LAYERS-1 draws first (furthest back)
+MAX_LAYERS = 10

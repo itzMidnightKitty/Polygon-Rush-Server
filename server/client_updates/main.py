@@ -13,8 +13,9 @@ from player import Player
 from level_manager import Level
 from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
+from game_objects import sort_for_draw
 
-CLIENT_VERSION = 1.5
+CLIENT_VERSION = 1.6
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -257,13 +258,13 @@ class Game:
 
     def load_online_hub(self):
         self.active_popup = None
-        self.online_tab = "levels" if self.network.token else "create"
+        self.online_tab = "levels"
         self.online_status_msg = "Loading..."
+        def cb(res):
+            if res.get("success"): self.online_levels = res.get("data", [])
+            else: self.online_status_msg = "Failed to load levels"
+        self.network.get_levels(callback=cb)
         if self.network.token:
-            def cb(res):
-                if res.get("success"): self.online_levels = res.get("data", [])
-                else: self.online_status_msg = "Failed to load levels"
-            self.network.get_levels(callback=cb)
             # Always refresh — my_profile_data drives admin/moderator permission
             # checks, so it must never carry over stale data from a different
             # account after a switch/login.
@@ -733,7 +734,7 @@ class Game:
                                     v = res.get("data", {}).get("version", 0)
                                     if v > CLIENT_VERSION:
                                         self.update_msg = "Update available! Downloading..."
-                                        update_files = ["main.py", "player.py", "network.py"]
+                                        update_files = ["main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py"]
 
                                         def download_next(idx):
                                             if idx >= len(update_files):
@@ -741,7 +742,7 @@ class Game:
                                                     "import os, time, sys, subprocess\n"
                                                     "time.sleep(1)\n"
                                                     "try:\n"
-                                                    "    for name in ['main.py', 'player.py', 'network.py']:\n"
+                                                    f"    for name in {update_files!r}:\n"
                                                     "        new_name = name[:-3] + '_new.py'\n"
                                                     "        if os.path.exists(new_name):\n"
                                                     "            os.replace(new_name, name)\n"
@@ -917,7 +918,9 @@ class Game:
                                 self.active_popup = None # click outside closes it
                             continue # skip rest of clicks
                             
-                        tabs = ["levels", "create", "users"] if self.network.token else ["create"]
+                        tabs = ["levels", "rated", "create"]
+                        if self.network.token:
+                            tabs = tabs + ["users"]
                         if getattr(self, 'my_profile_data', {}).get('is_admin'):
                             tabs = tabs + ["sent"]
                         for i, t in enumerate(tabs):
@@ -932,7 +935,7 @@ class Game:
                                     def cb_sent(res):
                                         if res.get("success"): self.sent_levels = res.get("data", [])
                                     self.network.get_sent_levels(callback=cb_sent)
-                                elif t == "levels" and hasattr(self, 'network'):
+                                elif t in ("levels", "rated") and hasattr(self, 'network'):
                                     def cb(res):
                                         if res.get("success"): self.online_levels = res.get("data", [])
                                     self.network.get_levels(callback=cb)
@@ -942,16 +945,18 @@ class Game:
                                     self.network.get_users("", callback=cb)
                                 elif t == "create":
                                     self.online_status_msg = ""
-                                
-                        if self.online_tab == "levels":
+
+                        if self.online_tab in ("levels", "rated"):
                             search_box = pygame.Rect(config.BASE_W//2 - 200, 150, 400, 40)
                             self.levels_search_active = search_box.collidepoint(logical_mouse)
-                            
+
                             filtered_levels = getattr(self, 'online_levels', [])
+                            if self.online_tab == "rated":
+                                filtered_levels = [l for l in filtered_levels if l.get('stars', 0) > 0]
                             s_txt = getattr(self, 'levels_search_text', '').lower()
                             if s_txt:
                                 filtered_levels = [l for l in filtered_levels if s_txt in l.get('title','').lower() or s_txt in l.get('level_id','').lower()]
-                                
+
                             for i, lvl in enumerate(filtered_levels):
                                 row_rect = pygame.Rect(config.BASE_W//2 - 320, 210 + i * 40 - 5, 640, 35)
                                 if row_rect.collidepoint(logical_mouse):
@@ -1319,7 +1324,8 @@ class Game:
                                 self.player.death_sound_played = False
                             else:
                                 folder = getattr(self.current_level, 'folder', self.get_custom_levels_dir())
-                                self.play_level(getattr(self.current_level, 'filename', "unknown.json"), folder, is_practice=getattr(self, 'is_practice_mode', False), reset_attempts=False)
+                                online_lvl = getattr(self, 'current_level', None) if folder == 'online' else None
+                                self.play_level(getattr(self.current_level, 'filename', "unknown.json"), folder, is_practice=getattr(self, 'is_practice_mode', False), reset_attempts=False, online_level=online_lvl)
                                 
                 elif self.state == "EDITOR":
                     if hasattr(self, 'editor') and self.editor:
@@ -1581,31 +1587,37 @@ class Game:
                 title = self.title_font.render("ONLINE HUB", True, config.CYAN)
                 self.screen.blit(title, (S(config.BASE_W//2) - title.get_width()//2, S(20)))
                 
-                tabs = ["levels", "create", "users"] if self.network.token else ["create"]
+                tabs = ["levels", "rated", "create"]
+                if self.network.token:
+                    tabs = tabs + ["users"]
                 if getattr(self, 'my_profile_data', {}).get('is_admin'):
                     tabs = tabs + ["sent"]
+                tab_labels = {"levels": "RECENT", "rated": "RATED LEVELS"}
                 for i, t in enumerate(tabs):
                     if len(tabs) == 1:
                         btn = pygame.Rect(S(config.BASE_W//2 - 90), S(80), S(180), S(40))
                     else:
                         btn = pygame.Rect(S(config.BASE_W//2 - 300 + i * 200), S(80), S(180), S(40))
                     pygame.draw.rect(self.screen, config.DARK_GRAY if getattr(self, 'online_tab', '') == t else config.GRAY, btn)
-                    txt = self.font.render(t.upper(), True, config.WHITE)
+                    txt = self.font.render(tab_labels.get(t, t.upper()), True, config.WHITE)
                     self.screen.blit(txt, (btn.centerx - txt.get_width()//2, btn.centery - txt.get_height()//2))
 
-                if getattr(self, 'online_tab', '') == "levels":
-                    if getattr(self, 'online_levels', []):
-                        filtered_levels = getattr(self, 'online_levels', [])
-                        s_txt = getattr(self, 'levels_search_text', '').lower()
-                        if s_txt:
-                            filtered_levels = [l for l in filtered_levels if s_txt in l.get('title','').lower() or s_txt in l.get('level_id','').lower()]
-                        
-                        search_box = pygame.Rect(S(config.BASE_W//2 - 200), S(150), S(400), S(40))
-                        pygame.draw.rect(self.screen, (20,20,20), search_box, 0, S(5))
-                        pygame.draw.rect(self.screen, config.CYAN if getattr(self, 'levels_search_active', False) else config.GRAY, search_box, max(1, S(2)), S(5))
-                        tt = self.font.render(getattr(self, 'levels_search_text', "") + ("|" if getattr(self, 'levels_search_active', False) and (pygame.time.get_ticks() // 500) % 2 == 0 else ""), True, config.WHITE)
-                        self.screen.blit(tt, (search_box.x + S(10), search_box.centery - tt.get_height()//2))
+                if getattr(self, 'online_tab', '') in ("levels", "rated"):
+                    is_rated_tab = getattr(self, 'online_tab', '') == "rated"
+                    filtered_levels = getattr(self, 'online_levels', [])
+                    if is_rated_tab:
+                        filtered_levels = [l for l in filtered_levels if l.get('stars', 0) > 0]
+                    s_txt = getattr(self, 'levels_search_text', '').lower()
+                    if s_txt:
+                        filtered_levels = [l for l in filtered_levels if s_txt in l.get('title','').lower() or s_txt in l.get('level_id','').lower()]
 
+                    search_box = pygame.Rect(S(config.BASE_W//2 - 200), S(150), S(400), S(40))
+                    pygame.draw.rect(self.screen, (20,20,20), search_box, 0, S(5))
+                    pygame.draw.rect(self.screen, config.CYAN if getattr(self, 'levels_search_active', False) else config.GRAY, search_box, max(1, S(2)), S(5))
+                    tt = self.font.render(getattr(self, 'levels_search_text', "") + ("|" if getattr(self, 'levels_search_active', False) and (pygame.time.get_ticks() // 500) % 2 == 0 else ""), True, config.WHITE)
+                    self.screen.blit(tt, (search_box.x + S(10), search_box.centery - tt.get_height()//2))
+
+                    if filtered_levels:
                         for i, lvl in enumerate(filtered_levels):
                             y = 210 + i * 40
                             pygame.draw.rect(self.screen, (40, 40, 50), pygame.Rect(S(config.BASE_W//2 - 320), S(y-5), S(640), S(35)))
@@ -1629,7 +1641,8 @@ class Game:
                             lk_t = self.font.render(f"Likes: {lvl.get('likes', 0)}  Dislikes: {lvl.get('dislikes', 0)}", True, config.GRAY)
                             self.screen.blit(lk_t, (S(config.BASE_W//2 - 260), S(y + 18)))
                     else:
-                        self.screen.blit(self.font.render("No levels found or loading...", True, config.GRAY), (S(config.BASE_W//2 - 100), S(200)))
+                        msg = "No rated levels found." if is_rated_tab else "No levels found or loading..."
+                        self.screen.blit(self.font.render(msg, True, config.GRAY), (S(config.BASE_W//2 - 100), S(200)))
                         
                 elif getattr(self, 'online_tab', '') == "create":
                     search_box = pygame.Rect(S(config.BASE_W//2 - 200), S(150), S(400), S(40))
@@ -1982,7 +1995,7 @@ class Game:
                 current_gnd = tuple(int(c) for c in self.fade_gnd_color)
                 
                 draw_world_background(self.screen, camera_x, self.camera_y, current_bg, self.current_level.bg_design)
-                for obj in self.current_level.objects:
+                for obj in sort_for_draw(self.current_level.objects):
                     if obj.type not in (config.OBJ_SPAWN, config.OBJ_COLOR_TRIGGER, config.OBJ_GROUND_COLOR_TRIGGER, config.OBJ_END_TRIGGER):
                         obj.draw(self.screen, camera_x, self.camera_y, play_zoom)
                 

@@ -325,15 +325,15 @@ class Player:
         w = max(1, int(self.width * z_scale))
         h = max(1, int(self.height * z_scale))
 
-        if noclip:
-            halo_rect = pygame.Rect(draw_x - int(4*z_scale), draw_y - int(4*z_scale), w + int(8*z_scale), h + int(8*z_scale))
-            pygame.draw.rect(surface, (255, 0, 0, 100), halo_rect, border_w, int(5*z_scale))
-
         color = config.P_COLOR
         color2 = getattr(config, 'P_COLOR2', config.WHITE)
         light = self._lighten(color)
         border_w = max(2, int(3 * z_scale))
         outline_offset = max(2, int(3 * z_scale))
+
+        if noclip:
+            halo_rect = pygame.Rect(draw_x - int(4*z_scale), draw_y - int(4*z_scale), w + int(8*z_scale), h + int(8*z_scale))
+            pygame.draw.rect(surface, (255, 0, 0, 100), halo_rect, border_w, int(5*z_scale))
 
         if self.mode == "ball":
             center = (draw_x + w//2, draw_y + h//2)
