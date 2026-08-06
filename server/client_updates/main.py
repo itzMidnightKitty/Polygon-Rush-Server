@@ -15,7 +15,7 @@ from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
 from game_objects import sort_for_draw
 
-CLIENT_VERSION = 1.8
+CLIENT_VERSION = 1.9
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -1888,15 +1888,14 @@ class Game:
                 if not self.player.dead and not self.player.won and not is_paused:
                     for obj in self.current_level.objects:
                         t = getattr(obj, 'type', -1)
-                        if t in (config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X, config.OBJ_SPEED_4X):
+                        if t in (config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
                             if not getattr(obj, 'activated', False) and self.player.x >= obj.x:
                                 obj.activated = True
-                                bs = getattr(config, 'SCROLL_SPEED', 6)
-                                if t == config.OBJ_SPEED_05X: self.current_level.speed = bs * 0.7
-                                elif t == config.OBJ_SPEED_1X: self.current_level.speed = bs * 1.0
-                                elif t == config.OBJ_SPEED_2X: self.current_level.speed = bs * 1.3
-                                elif t == config.OBJ_SPEED_3X: self.current_level.speed = bs * 1.6
-                                elif t == config.OBJ_SPEED_4X: self.current_level.speed = bs * 2.0
+                                # GD-accurate blocks-per-second, converted to world units/frame
+                                if t == config.OBJ_SPEED_05X: self.current_level.speed = 8.41 * config.GRID_SIZE / config.FPS
+                                elif t == config.OBJ_SPEED_1X: self.current_level.speed = 10.42 * config.GRID_SIZE / config.FPS
+                                elif t == config.OBJ_SPEED_2X: self.current_level.speed = 12.95 * config.GRID_SIZE / config.FPS
+                                elif t == config.OBJ_SPEED_3X: self.current_level.speed = 15.62 * config.GRID_SIZE / config.FPS
                     self.player.update(keys, self.current_level.objects, self.current_level.speed, ignore_mouse=getattr(self, 'ignore_mouse_jump', False))
                     
                     progress = max(0, min(100, int((self.player.x - 200) / max(1, self.current_level.end_x - 200) * 100)))

@@ -394,6 +394,29 @@ class GameObject:
             pygame.draw.rect(obj_surf, config.MAGENTA, (0, 0, gz, gz), int(3*z_scale))
             font = pygame.font.SysFont("Arial", int(18*z_scale), bold=True)
             obj_surf.blit(font.render("E", True, config.MAGENTA), (int(12*z_scale), int(8*z_scale)))
+        elif self.type in (config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
+            speed_color = {config.OBJ_SPEED_05X: config.ORANGE, config.OBJ_SPEED_1X: config.BLUE,
+                            config.OBJ_SPEED_2X: config.GREEN, config.OBJ_SPEED_3X: config.MAGENTA}[self.type]
+            chevron_count = {config.OBJ_SPEED_05X: 1, config.OBJ_SPEED_1X: 1,
+                              config.OBJ_SPEED_2X: 2, config.OBJ_SPEED_3X: 3}[self.type]
+            ch_h, ch_w = gz * 0.5, gz * 0.32
+            spacing = ch_w * 0.62
+            total_span = ch_w + (chevron_count - 1) * spacing
+            start_cx = gz / 2 - total_span / 2
+            cy = gz / 2
+            olw = max(1, int(1.1 * z_scale))
+            for i in range(chevron_count):
+                cx = start_cx + i * spacing
+                pts = [
+                    (cx, cy - ch_h / 2),
+                    (cx + ch_w, cy),
+                    (cx, cy + ch_h / 2),
+                    (cx + ch_w * 0.35, cy + ch_h / 2),
+                    (cx + ch_w * 0.65, cy),
+                    (cx + ch_w * 0.35, cy - ch_h / 2),
+                ]
+                pygame.draw.polygon(obj_surf, speed_color, pts)
+                pygame.draw.polygon(obj_surf, config.BLACK, pts, olw)
 
         if highlight:
             pygame.draw.rect(obj_surf, config.GREEN, (0, 0, w, h), max(1, int(4 * z_scale)))

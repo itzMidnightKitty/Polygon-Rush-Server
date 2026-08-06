@@ -401,6 +401,15 @@ class Editor:
                     self.set_layer(i)
                     return
 
+        # LAYER PICKER (DELETE mode, and EDIT mode with nothing selected) -- the
+        # EDIT+selection case is already handled above; this covers switching the
+        # active layer when there's no selection to also show a color swatch for.
+        if (self.mode == "DELETE" or (self.mode == "EDIT" and not self.selected_objs)) and mouse_just_pressed:
+            for i in range(config.MAX_LAYERS):
+                if self.layer_box_rect(i).collidepoint(logical_mouse):
+                    self.set_layer(i)
+                    return
+
         # BOTTOM BAR (Build Mode Selection/Color Panel)
         if self.mode == "BUILD" and logical_mouse[1] > config.BASE_H - 120:
             if mouse_just_pressed:
@@ -636,6 +645,21 @@ class Editor:
                     offset = max(0.0, (spawn_x - 200) / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS))
                     self.audio.play_music(self.level.music, offset=offset)
 
+    def draw_layer_controls(self, surface, font):
+        target_objs = self.selected_objs if (self.mode == "EDIT" and self.selected_objs) else None
+        surface.blit(font.render("Layer:", True, config.WHITE), (S(config.BASE_W - 460), S(config.BASE_H - 75)))
+        if target_objs:
+            common_layer = target_objs[0].layer if all(o.layer == target_objs[0].layer for o in target_objs) else None
+        else:
+            common_layer = self.current_layer
+        for i in range(config.MAX_LAYERS):
+            r = self.layer_box_rect(i)
+            rs = pygame.Rect(S(r.x), S(r.y), S(r.w), S(r.h))
+            pygame.draw.rect(surface, config.GREEN if i == common_layer else config.DARK_GRAY, rs)
+            pygame.draw.rect(surface, config.WHITE, rs, max(1, S(1)))
+            lt = font.render(str(i), True, config.BLACK if i == common_layer else config.WHITE)
+            surface.blit(lt, (rs.centerx - lt.get_width()//2, rs.centery - lt.get_height()//2))
+
     def draw_color_and_layer_controls(self, surface, font):
         target_objs = self.selected_objs if (self.mode == "EDIT" and self.selected_objs) else None
 
@@ -652,18 +676,7 @@ class Editor:
             mt = font.render("?", True, config.BLACK)
             surface.blit(mt, (swatch_s.centerx - mt.get_width()//2, swatch_s.centery - mt.get_height()//2))
 
-        surface.blit(font.render("Layer:", True, config.WHITE), (S(config.BASE_W - 460), S(config.BASE_H - 75)))
-        if target_objs:
-            common_layer = target_objs[0].layer if all(o.layer == target_objs[0].layer for o in target_objs) else None
-        else:
-            common_layer = self.current_layer
-        for i in range(config.MAX_LAYERS):
-            r = self.layer_box_rect(i)
-            rs = pygame.Rect(S(r.x), S(r.y), S(r.w), S(r.h))
-            pygame.draw.rect(surface, config.GREEN if i == common_layer else config.DARK_GRAY, rs)
-            pygame.draw.rect(surface, config.WHITE, rs, max(1, S(1)))
-            lt = font.render(str(i), True, config.BLACK if i == common_layer else config.WHITE)
-            surface.blit(lt, (rs.centerx - lt.get_width()//2, rs.centery - lt.get_height()//2))
+        self.draw_layer_controls(surface, font)
 
     def draw(self, surface, font, title_font):
         play_zoom = 2.0 
@@ -859,6 +872,8 @@ class Editor:
                 surface.blit(t, (sr.centerx - t.get_width()//2, sr.centery - sr.h//2 + S(2)))
 
             self.draw_color_and_layer_controls(surface, font)
+        elif self.mode == "DELETE" or self.mode == "EDIT":
+            self.draw_layer_controls(surface, font)
 
         for k in ["UNDO", "REDO"]:
             r = self.edit_btns[k]
