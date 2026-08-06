@@ -15,7 +15,7 @@ from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
 from game_objects import sort_for_draw
 
-CLIENT_VERSION = 2.2
+CLIENT_VERSION = 2.3
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 

@@ -237,15 +237,22 @@ class Player:
                         # launches down) -- it must NOT also be scaled by gravity_dir, or a
                         # ceiling pad placed for a reversed-gravity section (the standard
                         # way to use one) cancels back out and launches the wrong way.
-                        self.vel_y = 20.0 if obj.rotation == 180 else -20.0
-                        self.on_ground = False; self.on_roof = False
-                        self.target_rotation = round(self.rotation / 90) * 90 - 360 * self.gravity_dir
+                        # But the pad should only ever DO anything when the player's current
+                        # gravity actually matches what that mounting is meant for -- a
+                        # ceiling pad brushed by a normal-gravity player shouldn't fire at all.
+                        is_reversed_pad = obj.rotation == 180
+                        if is_reversed_pad == (self.gravity_dir == -1):
+                            self.vel_y = 20.0 if is_reversed_pad else -20.0
+                            self.on_ground = False; self.on_roof = False
+                            self.target_rotation = round(self.rotation / 90) * 90 - 360 * self.gravity_dir
                 elif obj.type == config.OBJ_PAD_PURPLE:
                     current_pads.add(id(obj))
                     if id(obj) not in self.active_pads:
-                        self.vel_y = 13.0 if obj.rotation == 180 else -13.0
-                        self.on_ground = False; self.on_roof = False
-                        self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
+                        is_reversed_pad = obj.rotation == 180
+                        if is_reversed_pad == (self.gravity_dir == -1):
+                            self.vel_y = 13.0 if is_reversed_pad else -13.0
+                            self.on_ground = False; self.on_roof = False
+                            self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
                 elif obj.type == config.OBJ_PAD_BLUE:
                     current_pads.add(id(obj))
                     if id(obj) not in self.active_pads:
