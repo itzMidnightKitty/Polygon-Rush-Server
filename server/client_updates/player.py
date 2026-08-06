@@ -214,16 +214,19 @@ class Player:
                 elif obj.type == config.OBJ_PORTAL_GRAV_DOWN:
                     if self.gravity_dir == -1:
                         self.gravity_dir = 1
-                        # Momentum carries through the flip (unlike the blue pad's gravity
-                        # toggle) -- only wave mode needs a nudge here since its velocity is
-                        # a direct function of gravity_dir rather than accumulated each frame.
+                        # Momentum carries through the flip (unlike the blue pad's hard reset),
+                        # but damped so it settles into the new gravity quickly instead of
+                        # coasting like a gravity orb. Wave mode is a direct function of
+                        # gravity_dir each frame rather than accumulated, so it just flips sign.
                         if self.mode == "wave": self.vel_y = -self.vel_y
+                        else: self.vel_y *= 0.4
                         self.on_ground = False; self.on_roof = False
                         self.target_rotation = round(self.rotation / 90) * 90 + 180 * self.gravity_dir
                 elif obj.type == config.OBJ_PORTAL_GRAV_UP:
                     if self.gravity_dir == 1:
                         self.gravity_dir = -1
                         if self.mode == "wave": self.vel_y = -self.vel_y
+                        else: self.vel_y *= 0.4
                         self.on_ground = False; self.on_roof = False
                         self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
                 elif obj.type == config.OBJ_PAD_YELLOW:
