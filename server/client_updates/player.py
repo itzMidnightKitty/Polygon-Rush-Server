@@ -228,13 +228,18 @@ class Player:
                 elif obj.type == config.OBJ_PAD_YELLOW:
                     current_pads.add(id(obj))
                     if id(obj) not in self.active_pads:
-                        self.vel_y = 20.0 * self.gravity_dir if obj.rotation == 180 else -20.0 * self.gravity_dir
+                        # Launch direction is purely a function of the pad's own mounting
+                        # rotation (0 = floor-mounted, launches up; 180 = ceiling-mounted,
+                        # launches down) -- it must NOT also be scaled by gravity_dir, or a
+                        # ceiling pad placed for a reversed-gravity section (the standard
+                        # way to use one) cancels back out and launches the wrong way.
+                        self.vel_y = 20.0 if obj.rotation == 180 else -20.0
                         self.on_ground = False; self.on_roof = False
                         self.target_rotation = round(self.rotation / 90) * 90 - 360 * self.gravity_dir
                 elif obj.type == config.OBJ_PAD_PURPLE:
                     current_pads.add(id(obj))
                     if id(obj) not in self.active_pads:
-                        self.vel_y = 13.0 * self.gravity_dir if obj.rotation == 180 else -13.0 * self.gravity_dir
+                        self.vel_y = 13.0 if obj.rotation == 180 else -13.0
                         self.on_ground = False; self.on_roof = False
                         self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
                 elif obj.type == config.OBJ_PAD_BLUE:

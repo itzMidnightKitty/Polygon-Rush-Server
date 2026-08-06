@@ -440,7 +440,7 @@ class Editor:
                     
             elif self.mode == "EDIT":
                 if mouse_just_pressed:
-                    clicked_objs = [obj for obj in reversed(sort_for_draw(self.level.objects)) if obj.rect.collidepoint(world_mouse_x, world_mouse_y)]
+                    clicked_objs = [obj for obj in reversed(sort_for_draw(self.level.objects)) if obj.rect.collidepoint(world_mouse_x, world_mouse_y) and obj.layer == self.current_layer]
                     if clicked_objs:
                         if not keys[pygame.K_LSHIFT]:
                             if len(self.selected_objs) == 1 and self.selected_objs[0] in clicked_objs:
@@ -467,7 +467,7 @@ class Editor:
                     y2 = max(self.selection_box_start[1], self.selection_box_end[1])
                     select_rect = pygame.Rect(x1, y1, x2-x1, y2-y1)
                     if select_rect.width > 5 or select_rect.height > 5:
-                        new_selection = [obj for obj in self.level.objects if obj.rect.colliderect(select_rect)]
+                        new_selection = [obj for obj in self.level.objects if obj.rect.colliderect(select_rect) and obj.layer == self.current_layer]
                         if keys[pygame.K_LSHIFT]:
                             for o in new_selection:
                                 if o not in self.selected_objs: self.selected_objs.append(o)
@@ -478,7 +478,7 @@ class Editor:
 
             elif self.mode == "DELETE":
                 if mouse_click[0]:
-                    target_objs = [o for o in self.level.objects if o.rect.collidepoint(world_mouse_x, world_mouse_y)]
+                    target_objs = [o for o in self.level.objects if o.rect.collidepoint(world_mouse_x, world_mouse_y) and o.layer == self.current_layer]
                     if target_objs:
                         if not self.dragging_stroke: 
                             self.save_state()
@@ -606,7 +606,7 @@ class Editor:
                         nx = gx + round(dx / config.GRID_SIZE) * config.GRID_SIZE
                         ny = gy + round(dy / config.GRID_SIZE) * config.GRID_SIZE
                         if nx < 0: nx = 0
-                        new_obj = GameObject(o_dict['type'], nx, ny, o_dict.get('rotation',0), o_dict.get('color_idx',0), o_dict.get('flip_x',False), o_dict.get('flip_y',False))
+                        new_obj = GameObject(o_dict['type'], nx, ny, o_dict.get('rotation',0), o_dict.get('color_idx',0), o_dict.get('flip_x',False), o_dict.get('flip_y',False), layer=o_dict.get('layer',0))
                         self.level.objects.append(new_obj)
                         new_objs.append(new_obj)
                     self.selected_objs = new_objs
@@ -749,7 +749,8 @@ class Editor:
 
         for obj in sort_for_draw(self.level.objects):
             is_selected = (obj in self.selected_objs)
-            obj.draw(surface, self.scroll_x, self.scroll_y, self.zoom, highlight=is_selected)
+            alpha = 255 if obj.layer == self.current_layer else 80
+            obj.draw(surface, self.scroll_x, self.scroll_y, self.zoom, highlight=is_selected, alpha=alpha)
 
         if self.selection_box_start and self.selection_box_end:
             x1 = min(self.selection_box_start[0], self.selection_box_end[0])

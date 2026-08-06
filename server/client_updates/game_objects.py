@@ -406,7 +406,7 @@ class GameObject:
             
         return obj_surf
 
-    def draw(self, surface, scroll_x, scroll_y, zoom=1.0, highlight=False):
+    def draw(self, surface, scroll_x, scroll_y, zoom=1.0, highlight=False, alpha=255):
         dy = self.y
         dx = self.x
         
@@ -433,12 +433,16 @@ class GameObject:
             size_override = (max(1, x1 - draw_x), max(1, y1 - draw_y))
 
         obj_surf = self.get_surface(zoom, highlight, size_override=size_override)
+        if alpha < 255:
+            obj_surf.set_alpha(alpha)
 
         if self.type in (config.OBJ_SAW, config.OBJ_SAW_2, config.OBJ_SAW_3, config.OBJ_GEAR_L, config.OBJ_GEAR_M, config.OBJ_GEAR_S):
             time_rot = (pygame.time.get_ticks() / 3.0) % 360
             if self.flip_x: time_rot = -time_rot
             orig_center = (draw_x + obj_surf.get_width()//2, draw_y + obj_surf.get_height()//2)
             rotated_surf = pygame.transform.rotate(obj_surf, -time_rot)
+            if alpha < 255:
+                rotated_surf.set_alpha(alpha)
             rect = rotated_surf.get_rect(center=orig_center)
             surface.blit(rotated_surf, rect.topleft)
             return
