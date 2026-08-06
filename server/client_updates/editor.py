@@ -210,6 +210,7 @@ class Editor:
 
 
         if self.playtesting:
+            config.apply_speed_triggers(self.level.objects, self.test_player.x, self.level)
             self.test_player.update(keys, self.level.objects, getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)), getattr(self, 'noclip', False))
             self.playtest_trail.append((self.test_player.x + self.test_player.width//2, self.test_player.y + self.test_player.height//2))
             
@@ -273,6 +274,7 @@ class Editor:
             return
 
         if self.music_testing:
+            config.apply_speed_triggers(self.level.objects, self.scroll_x + 200, self.level)
             self.scroll_x += getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6))
             if self.scroll_x + 200 > self.level.end_x:
                 self.music_testing = False; self.audio.stop_music()
@@ -332,7 +334,9 @@ class Editor:
 
         # UI INTERCEPTS FOR SELECTION BUTTONS (EDIT MODE ONLY)
         if self.mode == "EDIT" and self.selected_objs and mouse_just_pressed:
-            step = config.GRID_SIZE // 4 if keys[pygame.K_LSHIFT] else config.GRID_SIZE
+            if keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]: step = config.GRID_SIZE / 16
+            elif keys[pygame.K_LSHIFT]: step = config.GRID_SIZE // 4
+            else: step = config.GRID_SIZE
             for name, rect in self.edit_btns.items():
                 if rect.collidepoint(logical_mouse):
                     if name == "DEL":
@@ -590,7 +594,9 @@ class Editor:
                     self.clipboard_center = (cx, cy)
                     self.show_notification(f"Copied {len(self.clipboard)} objects!")
                 else:
-                    move_step = config.GRID_SIZE // 4 if mods & pygame.KMOD_SHIFT else config.GRID_SIZE
+                    if mods & pygame.KMOD_CTRL: move_step = config.GRID_SIZE / 16
+                    elif mods & pygame.KMOD_SHIFT: move_step = config.GRID_SIZE // 4
+                    else: move_step = config.GRID_SIZE
                     if event.key in (pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d):
                         self.save_state()
                         self.unsaved_changes = True
@@ -630,13 +636,17 @@ class Editor:
                 if self.level.music:
                     self.music_testing = True
                     self.scroll_x = max(0, self.level.get_spawn_x() - 200)
+                    self.level.speed = getattr(config, 'SCROLL_SPEED', 6)
+                    for obj in self.level.objects: obj.activated = False
                     offset = max(0.0, (self.level.get_spawn_x() - 200) / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS))
                     self.audio.play_music(self.level.music, offset=offset)
-            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER): 
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self.playtesting = True
                 self.playtest_trail = []
                 spawn_x = self.level.get_spawn_x()
                 spawn_y = self.level.get_spawn_y()
+                self.level.speed = getattr(config, 'SCROLL_SPEED', 6)
+                for obj in self.level.objects: obj.activated = False
                 self.test_player.reset(start_x=spawn_x, start_y=spawn_y, start_mode=self.level.start_gamemode)
                 
                 if hasattr(self, 'camera_y'): delattr(self, 'camera_y')

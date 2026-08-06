@@ -185,3 +185,18 @@ NON_ROTATABLE = [OBJ_COLOR_TRIGGER, OBJ_GROUND_COLOR_TRIGGER, OBJ_END_TRIGGER, O
 
 # Layering: layer 0 draws last (on top), layer MAX_LAYERS-1 draws first (furthest back)
 MAX_LAYERS = 10
+
+SPEED_TRIGGER_TYPES = (OBJ_SPEED_05X, OBJ_SPEED_1X, OBJ_SPEED_2X, OBJ_SPEED_3X)
+_SPEED_TRIGGER_BLOCKS_PER_SEC = {OBJ_SPEED_05X: 8.41, OBJ_SPEED_1X: 10.42, OBJ_SPEED_2X: 12.95, OBJ_SPEED_3X: 15.62}
+
+def speed_for_trigger(obj_type):
+    """World units/frame for a speed-trigger object type, or None if not one."""
+    bps = _SPEED_TRIGGER_BLOCKS_PER_SEC.get(obj_type)
+    return None if bps is None else bps * GRID_SIZE / FPS
+
+def apply_speed_triggers(objects, x, level):
+    """Activate any not-yet-activated speed trigger at or behind x, updating level.speed."""
+    for obj in objects:
+        if obj.type in SPEED_TRIGGER_TYPES and not getattr(obj, 'activated', False) and x >= obj.x:
+            obj.activated = True
+            level.speed = speed_for_trigger(obj.type)

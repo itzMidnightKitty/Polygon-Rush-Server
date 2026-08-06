@@ -79,7 +79,8 @@ class GameObject:
             elif self.rotation == 90: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
             elif self.rotation == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
             elif self.rotation == 270: ox, oy, w, h = self.x + config.GRID_SIZE//2, self.y, config.GRID_SIZE//2, config.GRID_SIZE
-        elif self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP):
+        elif self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP,
+                           config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
             ox, oy, w, h = self.x, self.y - config.GRID_SIZE, config.GRID_SIZE, config.GRID_SIZE * 3
         elif self.type in (config.OBJ_PAD_YELLOW, config.OBJ_PAD_BLUE, config.OBJ_PAD_PURPLE):
             if self.rotation == 0: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - 12, config.GRID_SIZE, 12
@@ -126,7 +127,8 @@ class GameObject:
         self.rect = pygame.Rect(ox, oy, w, h)
 
     def get_surface(self, zoom=1.0, highlight=False, size_override=None):
-        if self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP):
+        if self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP,
+                         config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
             sw, sh = config.GRID_SIZE, config.GRID_SIZE * 3
         elif self.type == config.OBJ_PULSEROD_2: sw, sh = config.GRID_SIZE, config.GRID_SIZE * 2
         elif self.type == config.OBJ_PULSEROD_3: sw, sh = config.GRID_SIZE, config.GRID_SIZE * 3
@@ -399,21 +401,22 @@ class GameObject:
                             config.OBJ_SPEED_2X: config.GREEN, config.OBJ_SPEED_3X: config.MAGENTA}[self.type]
             chevron_count = {config.OBJ_SPEED_05X: 1, config.OBJ_SPEED_1X: 1,
                               config.OBJ_SPEED_2X: 2, config.OBJ_SPEED_3X: 3}[self.type]
-            ch_h, ch_w = gz * 0.5, gz * 0.32
+            direction = -1 if self.type == config.OBJ_SPEED_05X else 1  # slow points backward
+            ch_h, ch_w = h * 0.4, w * 0.6
             spacing = ch_w * 0.62
             total_span = ch_w + (chevron_count - 1) * spacing
-            start_cx = gz / 2 - total_span / 2
-            cy = gz / 2
+            start_cx = w / 2 - total_span / 2 if direction == 1 else w / 2 + total_span / 2
+            cy = h / 2
             olw = max(1, int(1.1 * z_scale))
             for i in range(chevron_count):
-                cx = start_cx + i * spacing
+                cx = start_cx + i * spacing * direction
                 pts = [
                     (cx, cy - ch_h / 2),
-                    (cx + ch_w, cy),
+                    (cx + ch_w * direction, cy),
                     (cx, cy + ch_h / 2),
-                    (cx + ch_w * 0.35, cy + ch_h / 2),
-                    (cx + ch_w * 0.65, cy),
-                    (cx + ch_w * 0.35, cy - ch_h / 2),
+                    (cx + ch_w * 0.35 * direction, cy + ch_h / 2),
+                    (cx + ch_w * 0.65 * direction, cy),
+                    (cx + ch_w * 0.35 * direction, cy - ch_h / 2),
                 ]
                 pygame.draw.polygon(obj_surf, speed_color, pts)
                 pygame.draw.polygon(obj_surf, config.BLACK, pts, olw)
@@ -433,7 +436,8 @@ class GameObject:
         dy = self.y
         dx = self.x
         
-        if self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP): dy = self.y - config.GRID_SIZE
+        if self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP,
+                        config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X): dy = self.y - config.GRID_SIZE
         elif self.type == config.OBJ_PULSEROD_2: dy = self.y - config.GRID_SIZE
         elif self.type == config.OBJ_PULSEROD_3: dy = self.y - config.GRID_SIZE * 2
         elif self.type == config.OBJ_SAW: dy = (self.y + config.GRID_SIZE//2) - config.GRID_SIZE; dx = (self.x + config.GRID_SIZE//2) - config.GRID_SIZE
