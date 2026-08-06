@@ -79,8 +79,12 @@ class GameObject:
             elif self.rotation == 90: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
             elif self.rotation == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
             elif self.rotation == 270: ox, oy, w, h = self.x + config.GRID_SIZE//2, self.y, config.GRID_SIZE//2, config.GRID_SIZE
-        elif self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP,
-                           config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
+        elif self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP):
+            if self.rotation in (90, 270):
+                ox, oy, w, h = self.x - config.GRID_SIZE, self.y, config.GRID_SIZE * 3, config.GRID_SIZE
+            else:
+                ox, oy, w, h = self.x, self.y - config.GRID_SIZE, config.GRID_SIZE, config.GRID_SIZE * 3
+        elif self.type in (config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
             ox, oy, w, h = self.x, self.y - config.GRID_SIZE, config.GRID_SIZE, config.GRID_SIZE * 3
         elif self.type in (config.OBJ_PAD_YELLOW, config.OBJ_PAD_BLUE, config.OBJ_PAD_PURPLE):
             if self.rotation == 0: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - 12, config.GRID_SIZE, 12
