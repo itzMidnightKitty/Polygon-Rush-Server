@@ -1,11 +1,14 @@
 import pygame
 import os
+import threading
 import config
 from config import S
 from level_manager import Level
 from player import Player
 from game_objects import GameObject, sort_for_draw
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
+from ui_elements import TextInput
+import newgrounds
 
 class Editor:
     def __init__(self, audio_manager, target_filename=None, folder=None):
@@ -49,6 +52,11 @@ class Editor:
         self.preview_song = None
         self.music_testing = False
         self.ui_hovered = False
+
+        self.ng_id_input = None  # lazily created in draw() once a font is available
+        self.ng_fetching = False
+        self.ng_status_msg = ""
+        self.ng_status_color = None
         
         self.can_build = False
         self.dragging_stroke = False
@@ -186,6 +194,25 @@ class Editor:
 
         self.ui_hovered = False
 
+        if self.ng_fetching and getattr(self, '_ng_fetch_result', None):
+            result = self._ng_fetch_result
+            self._ng_fetch_result = None
+            self.ng_fetching = False
+            if result[0] == "success":
+                _, filename, title, song_id = result
+                if filename not in self.audio.available_tracks:
+                    self.audio.available_tracks.append(filename)
+                self.level.music = filename
+                self.level.ng_song_id = song_id
+                self.level.ng_song_name = title
+                self.unsaved_changes = True
+                self.ng_status_msg = f"Added: {title}"
+                self.ng_status_color = config.GREEN
+                if self.ng_id_input: self.ng_id_input.text = ""
+            else:
+                self.ng_status_msg = result[1]
+                self.ng_status_color = config.RED
+
         if logical_mouse[1] < 40 or logical_mouse[1] > config.BASE_H - 120: self.ui_hovered = True
         if self.options_active or self.song_browser_active or self.show_confirm_exit or self.color_picker_active: self.ui_hovered = True
         
@@ -261,16 +288,20 @@ class Editor:
                 box = pygame.Rect(config.BASE_W//2 - 300, 100, 600, config.BASE_H - 200)
                 if not box.collidepoint(logical_mouse):
                     self.audio.stop_music(); self.preview_song = None; self.song_browser_active = False; return
+                fetch_btn = pygame.Rect(config.BASE_W//2 - 20, 140, 100, 36)
+                if fetch_btn.collidepoint(logical_mouse):
+                    self.start_ng_fetch()
+                    return
                 for i, song in enumerate(self.audio.available_tracks):
-                    play_btn = pygame.Rect(config.BASE_W//2 - 250, 200 + i*40, 40, 30)
-                    sel_btn = pygame.Rect(config.BASE_W//2 + 160, 200 + i*40, 90, 30)
+                    play_btn = pygame.Rect(config.BASE_W//2 - 250, 250 + i*40, 40, 30)
+                    sel_btn = pygame.Rect(config.BASE_W//2 + 160, 250 + i*40, 90, 30)
                     if play_btn.collidepoint(logical_mouse):
                         if self.preview_song == song:
                             self.audio.stop_music(); self.preview_song = None
                         else:
                             self.audio.play_music(song); self.preview_song = song
                     elif sel_btn.collidepoint(logical_mouse):
-                        self.level.music = song; self.unsaved_changes = True; self.audio.stop_music(); self.preview_song = None; self.song_browser_active = False
+                        self.level.music = song; self.level.ng_song_id = None; self.level.ng_song_name = None; self.unsaved_changes = True; self.audio.stop_music(); self.preview_song = None; self.song_browser_active = False
             return
 
         if self.music_testing:
@@ -501,6 +532,40 @@ class Editor:
                             if o in self.level.objects: self.level.objects.remove(o)
                         self.selected_objs = [o for o in self.selected_objs if o in self.level.objects]
 
+    def start_ng_fetch(self):
+        if not self.ng_id_input:
+            return
+        song_id = self.ng_id_input.text.strip()
+        if not song_id:
+            self.ng_status_msg = "Enter a Newgrounds song ID first."
+            self.ng_status_color = config.RED
+            return
+        if self.ng_fetching:
+            return
+        self.ng_fetching = True
+        self._ng_fetch_result = None
+        self.ng_status_msg = f"Fetching song #{song_id}..."
+        self.ng_status_color = None
+
+        def worker():
+            try:
+                data, title = newgrounds.fetch_song_info(song_id)
+                filename = newgrounds.safe_filename(song_id, title)
+                music_dir = os.path.join("audio", "music")
+                os.makedirs(music_dir, exist_ok=True)
+                path = os.path.join(music_dir, filename)
+                with open(path, "wb") as f:
+                    f.write(data)
+                self._ng_fetch_result = ("success", filename, title, song_id)
+            except newgrounds.NewgroundsError as e:
+                self._ng_fetch_result = ("error", str(e))
+            except Exception as e:
+                self._ng_fetch_result = ("error", f"Unexpected error: {e}")
+
+        t = threading.Thread(target=worker)
+        t.daemon = True
+        t.start()
+
     def handle_event(self, event, logical_mouse):
         if self.show_confirm_exit:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: self.show_confirm_exit = False
@@ -512,6 +577,11 @@ class Editor:
                 self.song_browser_active = False
                 self.color_picker_active = False
                 self.audio.stop_music()
+                return
+            if self.song_browser_active and self.ng_id_input:
+                action = self.ng_id_input.handle_event(event, logical_mouse)
+                if action == "submit":
+                    self.start_ng_fetch()
             return
 
 
@@ -957,23 +1027,38 @@ class Editor:
             
             t = title_font.render("SONG BROWSER", True, config.WHITE)
             surface.blit(t, (S(config.BASE_W//2) - t.get_width()//2, S(110)))
-            
+
+            if self.ng_id_input is None:
+                self.ng_id_input = TextInput(config.BASE_W//2 - 300 + 20, 140, 260, 36, font, placeholder="Newgrounds song ID")
+            self.ng_id_input.font = font
+            self.ng_id_input.draw(surface)
+
+            fetch_btn = pygame.Rect(S(config.BASE_W//2 - 20), S(140), S(100), S(36))
+            pygame.draw.rect(surface, (60, 60, 30) if self.ng_fetching else config.YELLOW, fetch_btn, 0, S(5))
+            ft = font.render("...", True, config.BLACK) if self.ng_fetching else font.render("FETCH", True, config.BLACK)
+            surface.blit(ft, (fetch_btn.centerx - ft.get_width()//2, fetch_btn.centery - ft.get_height()//2))
+
+            if self.ng_status_msg:
+                color = self.ng_status_color or config.GRAY
+                msg_t = font.render(self.ng_status_msg, True, color)
+                surface.blit(msg_t, (S(config.BASE_W//2 - 300 + 20), S(182)))
+
             for i, song in enumerate(self.audio.available_tracks):
-                play_btn = pygame.Rect(S(config.BASE_W//2 - 250), S(200 + i*40), S(40), S(30))
+                play_btn = pygame.Rect(S(config.BASE_W//2 - 250), S(250 + i*40), S(40), S(30))
                 pygame.draw.rect(surface, config.YELLOW if self.preview_song == song else config.GRAY, play_btn, 0, S(5))
                 pt = font.render("||" if self.preview_song == song else ">", True, config.BLACK if self.preview_song == song else config.WHITE)
                 surface.blit(pt, (play_btn.centerx - pt.get_width()//2, play_btn.centery - pt.get_height()//2))
-                
-                rect = pygame.Rect(S(config.BASE_W//2 - 200), S(200 + i*40), S(350), S(30))
+
+                rect = pygame.Rect(S(config.BASE_W//2 - 200), S(250 + i*40), S(350), S(30))
                 pygame.draw.rect(surface, config.GRAY, rect, 0, S(5))
                 st = font.render(song, True, config.WHITE)
                 surface.blit(st, (rect.x + S(10), rect.centery - st.get_height()//2))
 
-                sel_btn = pygame.Rect(S(config.BASE_W//2 + 160), S(200 + i*40), S(90), S(30))
+                sel_btn = pygame.Rect(S(config.BASE_W//2 + 160), S(250 + i*40), S(90), S(30))
                 pygame.draw.rect(surface, config.GREEN, sel_btn, 0, S(5))
                 s_t = font.render("SELECT", True, config.BLACK)
                 surface.blit(s_t, (sel_btn.centerx - s_t.get_width()//2, sel_btn.centery - s_t.get_height()//2))
-            
+
             tip = font.render("(Click anywhere outside to close)", True, config.GRAY)
             surface.blit(tip, (S(config.BASE_W//2) - tip.get_width()//2, box.bottom - S(30)))
 

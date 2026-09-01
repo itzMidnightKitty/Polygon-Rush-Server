@@ -7,6 +7,8 @@ class Level:
     def __init__(self, filename=None, folder="levels/custom"):
         self.objects = []
         self.music = None
+        self.ng_song_id = None
+        self.ng_song_name = None
         self.speed = config.SCROLL_SPEED
         self.name = "Unnamed"
         self.creator = "Unknown"
@@ -37,11 +39,14 @@ class Level:
                 self.name = data.get("name", filename.replace(".json",""))
                 self.creator = data.get("creator", "Unknown")
                 self.music = data.get("music", None)
+                self.ng_song_id = data.get("ng_song_id", None)
+                self.ng_song_name = data.get("ng_song_name", None)
                 if "song_data" in data and self.music:
-                    audio_path = os.path.join("audio", self.music)
+                    audio_path = os.path.join("audio", "music", self.music)
                     if not os.path.exists(audio_path):
                         import base64
                         try:
+                            os.makedirs(os.path.dirname(audio_path), exist_ok=True)
                             with open(audio_path, "wb") as af:
                                 af.write(base64.b64decode(data["song_data"]))
                         except Exception: pass
@@ -68,11 +73,14 @@ class Level:
             self.name = data.get("name", "Online Level")
             self.creator = data.get("creator", "Unknown")
             self.music = data.get("music", None)
+            self.ng_song_id = data.get("ng_song_id", None)
+            self.ng_song_name = data.get("ng_song_name", None)
             if "song_data" in data and self.music:
-                audio_path = os.path.join("audio", self.music)
+                audio_path = os.path.join("audio", "music", self.music)
                 if not os.path.exists(audio_path):
                     import base64
                     try:
+                        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
                         with open(audio_path, "wb") as af:
                             af.write(base64.b64decode(data["song_data"]))
                     except Exception: pass
@@ -113,6 +121,8 @@ class Level:
             "name": self.name,
             "creator": self.creator,
             "music": self.music,
+            "ng_song_id": getattr(self, 'ng_song_id', None),
+            "ng_song_name": getattr(self, 'ng_song_name', None),
             "speed": self.speed,
             "start_gamemode": self.start_gamemode,
             "start_bg_idx": self.start_bg_idx,
@@ -128,7 +138,7 @@ class Level:
         }
         
         if self.music:
-            audio_path = os.path.join("audio", self.music)
+            audio_path = os.path.join("audio", "music", self.music)
             if os.path.exists(audio_path):
                 import base64
                 try:

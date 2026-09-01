@@ -15,7 +15,7 @@ from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
 from game_objects import sort_for_draw
 
-CLIENT_VERSION = 2.3
+CLIENT_VERSION = 2.4
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -734,7 +734,7 @@ class Game:
                                     v = res.get("data", {}).get("version", 0)
                                     if v > CLIENT_VERSION:
                                         self.update_msg = "Update available! Downloading..."
-                                        update_files = ["main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py"]
+                                        update_files = ["main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py", "newgrounds.py"]
 
                                         def download_next(idx):
                                             if idx >= len(update_files):
