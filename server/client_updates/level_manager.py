@@ -11,6 +11,7 @@ class Level:
         self.ng_song_name = None
         self.song_offset = 0.0
         self.speed = config.SCROLL_SPEED
+        self.start_speed = config.SCROLL_SPEED
         self.name = "Unnamed"
         self.creator = "Unknown"
         self.start_gamemode = "cube"
@@ -53,6 +54,10 @@ class Level:
                                 af.write(base64.b64decode(data["song_data"]))
                         except Exception: pass
                 self.speed = data.get("speed", config.SCROLL_SPEED)
+                self.start_speed = self.speed  # the configured starting speed, kept
+                # separately from self.speed since speed triggers mutate self.speed
+                # live during a run -- resetting on replay must go back to THIS, not
+                # the global default
                 self.start_gamemode = data.get("start_gamemode", "cube")
                 self.start_bg_idx = data.get("start_bg_idx", 0)
                 self.start_ground_idx = data.get("start_ground_idx", 7)
@@ -88,6 +93,7 @@ class Level:
                             af.write(base64.b64decode(data["song_data"]))
                     except Exception: pass
             self.speed = data.get("speed", config.SCROLL_SPEED)
+            self.start_speed = self.speed
             self.start_gamemode = data.get("start_gamemode", "cube")
             self.start_bg_idx = data.get("start_bg_idx", 0)
             self.start_ground_idx = data.get("start_ground_idx", 7)

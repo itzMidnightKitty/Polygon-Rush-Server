@@ -34,31 +34,42 @@ class Player:
     def update(self, keys, objects, scroll_speed, noclip=False, ignore_mouse=False):
         if self.dead or self.won: return
 
-        # Mode-switch hitbox resizing always anchors to the edge that faces the
-        # current effective floor (by gravity_dir), never a centered split. A
-        # centered resize could grow the new, larger hitbox toward the ground/a
-        # ledge the old, shorter hitbox wasn't actually touching (e.g. ship->cube
-        # while flying low), causing an unfair instant clip-death right at the
-        # transition. Anchoring by gravity_dir is always well-defined, airborne
-        # or not, so on_ground/on_roof no longer need to be consulted here.
+        # Mode-switch hitbox resizing anchors to whichever edge faces a solid
+        # surface the player is actually touching right now, growing the new,
+        # taller hitbox away from it -- never toward it, and never a centered
+        # split (which could grow toward a ledge the old, shorter hitbox
+        # wasn't touching). This used to key off gravity_dir alone (grow
+        # "up" whenever gravity_dir==1, full stop), which is only correct
+        # when the touched surface is actually below -- on_ground normally
+        # is below in normal gravity, but on_roof (e.g. ship floating up
+        # against the underside of a ceiling block, still in normal gravity)
+        # is ABOVE, and blindly growing "up" there clips straight into the
+        # ceiling that the shorter hitbox wasn't touching a moment earlier.
+        # A surface below is what on_ground+gravity_dir==1 means, or the
+        # mirror case on_roof+gravity_dir==-1 (touching a floor-position
+        # object from above while gravity is reversed) -- in either of
+        # those two cases growing upward (anchoring the bottom) is safe;
+        # every other case (including plain airborne, no contact at all)
+        # anchors the top instead.
+        grow_upward_safe = (self.on_ground and self.gravity_dir == 1) or (self.on_roof and self.gravity_dir == -1)
         if self.mode == "wave":
             if self.width != 24:
-                if self.gravity_dir == 1: self.y += self.height - 24
+                if grow_upward_safe: self.y += self.height - 24
                 self.width, self.height = 24, 24
                 self.rect.width, self.rect.height = 24, 24
         elif self.mode == "ship":
             if self.width != 28:
-                if self.gravity_dir == 1: self.y += self.height - 16
+                if grow_upward_safe: self.y += self.height - 16
                 self.width, self.height = 28, 16
                 self.rect.width, self.rect.height = 28, 16
         elif self.mode == "ufo":
             if self.width != 28:
-                if self.gravity_dir == 1: self.y += self.height - 28
+                if grow_upward_safe: self.y += self.height - 28
                 self.width, self.height = 28, 28
                 self.rect.width, self.rect.height = 28, 28
         else:
             if self.width != config.GRID_SIZE:
-                if self.gravity_dir == 1: self.y -= config.GRID_SIZE - self.height
+                if grow_upward_safe: self.y -= config.GRID_SIZE - self.height
                 self.width, self.height = config.GRID_SIZE, config.GRID_SIZE
                 self.rect.width, self.rect.height = config.GRID_SIZE, config.GRID_SIZE
 
@@ -390,13 +401,22 @@ class Player:
         surface.blit(rotated, rect.topleft)
 
     def draw(self, surface, scroll_x, scroll_y, zoom=1.0, noclip=False):
-        if self.dead: return
+        # Still draws while dead -- frozen at the death position (physics
+        # updates are already gated off elsewhere once dead) rather than
+        # instantly vanishing, so the death-pause window in main.py can show
+        # the player sitting right on whatever killed them.
         z_scale = zoom * config.get_scale()
 
         draw_x = int((self.x - scroll_x) * z_scale)
         draw_y = int((self.y - scroll_y) * z_scale)
-        w = max(1, int(self.width * z_scale))
-        h = max(1, int(self.height * z_scale))
+        # Far edge computed independently and subtracted, not size*z_scale on its
+        # own -- int(pos)+int(size) and int(pos+size) round independently and can
+        # land a pixel apart. Since the player's world-space rect.bottom is set
+        # to exactly GROUND_Y on contact, that 1px drift is exactly "the icon
+        # is slightly underground/floating" depending on which way it rounds
+        # (same fix as the ground-flush spike floating issue in game_objects.py).
+        w = max(1, int((self.x + self.width - scroll_x) * z_scale) - draw_x)
+        h = max(1, int((self.y + self.height - scroll_y) * z_scale) - draw_y)
 
         color = config.P_COLOR
         color2 = getattr(config, 'P_COLOR2', config.WHITE)

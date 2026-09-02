@@ -151,6 +151,20 @@ def update_icons(profile: schemas.UserProfileUpdate, db: Session = Depends(get_d
     db.refresh(current_user)
     return _finalize_user(db, current_user)
 
+@app.post("/users/me/password")
+def change_password(data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    # Auth here is "you hold a valid token for this account" -- no re-entry of
+    # the OLD password, since the client auto-signs into the last account on
+    # launch and there's no separate email/recovery flow yet. Fine for now at
+    # this playerbase size; worth tightening (require current password, or a
+    # real recovery flow) before that stops being true.
+    new_password = (data.get("new_password") or "").strip()
+    if not new_password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+    current_user.password_hash = auth.get_password_hash(new_password)
+    db.commit()
+    return {"success": True}
+
 @app.post("/users/me/playtime", response_model=schemas.UserResponse)
 def report_playtime(data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     seconds = data.get("seconds", 0)
@@ -582,7 +596,7 @@ def get_comments(level_id: str, db: Session = Depends(get_db)):
 # --- UPDATER ROUTES ---
 @app.get("/version")
 def check_version():
-    return {"success": True, "version": 3.5}
+    return {"success": True, "version": 4.0}
 
 @app.get("/download_update")
 def download_update(file: str = "main.py"):

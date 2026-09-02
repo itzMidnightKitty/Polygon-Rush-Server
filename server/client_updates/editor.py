@@ -654,8 +654,15 @@ class Editor:
                 self.noclip = not getattr(self, 'noclip', False)
             elif event.type == pygame.KEYDOWN and event.key in (pygame.K_a, pygame.K_LEFT, pygame.K_d, pygame.K_RIGHT):
                 direction = -1 if event.key in (pygame.K_a, pygame.K_LEFT) else 1
-                target = self.level.get_closest_spawn(self.test_player.x, direction)
-                if target:
+                # Cycles a tracked index through the spawn list rather than looking up
+                # "closest spawn" from the player's live position -- that lookup breaks
+                # the moment you've actually moved (walked past a spawn, or already
+                # switched once), since it stops finding anything in one direction long
+                # before the other.
+                spawn_pts = self.level.get_spawn_points()
+                if len(spawn_pts) >= 2:
+                    self.current_spawn_idx = (getattr(self, 'current_spawn_idx', len(spawn_pts) - 1) + direction) % len(spawn_pts)
+                    target = spawn_pts[self.current_spawn_idx]
                     self.test_player.reset(start_x=target[0], start_y=target[1], start_mode=self.level.start_gamemode)
                     self.playtest_trail = []
                     # Playtest music is synced to spawn position when it first starts
@@ -798,16 +805,18 @@ class Editor:
                     # the music_testing branch in update()); only music_test_x, the
                     # playhead, advances from here.
                     self.music_test_x = self.scroll_x + 200
-                    self.level.speed = getattr(config, 'SCROLL_SPEED', 6)
+                    self.level.speed = getattr(self.level, 'start_speed', self.level.speed)
                     for obj in self.level.objects: obj.activated = False
                     offset = max(0.0, self.scroll_x / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS) + getattr(self.level, 'song_offset', 0.0))
                     self.audio.play_music(self.level.music, offset=offset)
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self.playtesting = True
                 self.playtest_trail = []
+                spawn_pts = self.level.get_spawn_points()
+                self.current_spawn_idx = len(spawn_pts) - 1 if spawn_pts else 0
                 spawn_x = self.level.get_spawn_x()
                 spawn_y = self.level.get_spawn_y()
-                self.level.speed = getattr(config, 'SCROLL_SPEED', 6)
+                self.level.speed = getattr(self.level, 'start_speed', self.level.speed)
                 for obj in self.level.objects: obj.activated = False
                 self.test_player.reset(start_x=spawn_x, start_y=spawn_y, start_mode=self.level.start_gamemode)
                 

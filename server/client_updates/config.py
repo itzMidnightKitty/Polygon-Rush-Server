@@ -1,5 +1,46 @@
 import pygame
 
+# --- CHANGELOG (shown in Settings) ---
+# Newest first. Add one entry per version bump going forward -- keep it in
+# sync with the version number in main.py's CLIENT_VERSION.
+CHANGELOG = [
+    ("4.0", ["Redesigned the Dotted Block (embossed bubble look) and Circle Block (now tiles seamlessly -- circles touch their neighbors and combine into small circles at grid intersections, instead of one disconnected dot per cell)."]),
+    ("3.9", ["Level completion is now a short scripted sequence (camera/player ease to a stop, get pulled into a glowing end-wall with a particle burst, rotating in) instead of an instant cut. Music keeps playing through the completion menu now too, only stopping when you actually leave.",
+             "Added a Change Password option in Settings.",
+             "Added this changelog screen."]),
+    ("3.8", ["Fixed floating spikes / the player icon sitting slightly underground / outline blocks only lining up when zoomed in close -- all the same root cause (a 1px rounding mismatch between an object's edge and whatever it's meant to sit flush against), most noticeable zoomed out.",
+             "Fixed the brick block's pattern not lining up with itself vertically between stacked cells.",
+             "Death no longer instantly removes the player -- it stays visible with its hitbox outlined for the respawn pause, so it's clear what killed you."]),
+    ("3.7", ["Added glow decor pieces: Flat, Corner, and Corner (Inverse) -- colorable, soft light, mesh together into rounded borders."]),
+    ("3.6", ["Fixed icon/color customization resetting on every launch (it only ever loaded when opening the Profile screen).",
+             "Fixed ship being able to clip through vertical walls without dying.",
+             "Fixed the start-position switcher only working in one direction once you'd moved.",
+             "Fixed a level's configured Starting Speed being silently overwritten back to 1x on every play."]),
+    ("3.5", ["Fixed ship being able to clip through walls in certain cases.",
+             "Fixed song offset not being sent/applied when downloading someone else's uploaded level.",
+             "Increased network timeout to better tolerate the server waking up from sleep."]),
+    ("3.4", ["Fixed your own progress/best-% on a level leaking into other players' copies when they downloaded it.",
+             "Fixed the game launching at an oversized window on some monitors."]),
+    ("3.3", ["Performance: object rendering is now cached instead of being rebuilt from scratch every frame -- should fix stutter when new parts of a level scroll into view."]),
+    ("3.2", ["The game now checks for updates automatically on launch instead of requiring the menu button."]),
+    ("3.1", ["Added the Playtester rank (cosmetic, admin-granted).",
+             "Admins can now push official levels that every client auto-downloads."]),
+    ("3.0", ["Discord Rich Presence no longer risks stalling the game.",
+             "Start-position switcher now wraps around instead of getting stuck at one end."]),
+    ("2.8 - 2.9", ["Added Discord Rich Presence.",
+                   "Fixed blue gravity-flip pads re-triggering repeatedly / causing erratic physics when placed in a row."]),
+    ("2.5 - 2.7", ["Added song offset, clipboard paste support in text fields, player stats (playtime/demons beaten).",
+                   "Overhauled the song library (Official/Custom tabs, per-track metadata).",
+                   "Decoupled the music-preview camera so you can move it freely while music plays.",
+                   "Added the start-position switcher.",
+                   "Fixed several hitbox/collision bugs around mode switching, ceilings, and rotation."]),
+    ("1.5 - 2.3", ["Introduced the online level system: uploading, browsing, rating, liking, moderation, and the admin Sent tab.",
+                   "Added the color/block/layer system, seamless block tiling, and several new block/outline designs.",
+                   "Added placeable speed-change triggers.",
+                   "Fixed numerous portal, pad, and gravity-related physics bugs."]),
+    ("Early development", ["Initial client/server build: core physics, the level editor, and account system."]),
+]
+
 # --- LOGICAL RESOLUTION ENGINE ---
 BASE_W, BASE_H = 1920, 1080
 RENDER_W, RENDER_H = 1920, 1080 
@@ -150,6 +191,12 @@ OBJ_OUTLINE_LINE, OBJ_OUTLINE_CORNER_PIXEL, OBJ_OUTLINE_3SIDE, OBJ_OUTLINE_OPPOS
 # More detail block variants (solid, no border, textured fill)
 OBJ_BLOCK_DOTS, OBJ_BLOCK_STRIPES, OBJ_BLOCK_CROSS, OBJ_BLOCK_CIRCLE = 59, 60, 61, 62
 
+# Glow pieces: pure soft light, no fill/outline of their own -- a bright core
+# fading smoothly to fully transparent. Colorable via color_idx like the
+# outline pieces. FLAT and CORNER/CORNER_INVERSE share the same falloff
+# shape/reach so they mesh into one continuous glow when placed together.
+OBJ_GLOW_FLAT, OBJ_GLOW_CORNER, OBJ_GLOW_CORNER_INVERSE = 63, 64, 65
+
 
 OBJ_NAMES = {
     OBJ_BLOCK: "Solid Block", OBJ_HALF_BLOCK: "Half Block", OBJ_SPIKE: "Spike", OBJ_HALF_SPIKE: "Half Spike",
@@ -176,6 +223,8 @@ OBJ_NAMES = {
     OBJ_OUTLINE_CORNER2: "Outline: Corner Two",
     OBJ_BLOCK_DOTS: "Dotted Block", OBJ_BLOCK_STRIPES: "Panel Block",
     OBJ_BLOCK_CROSS: "Cross Block", OBJ_BLOCK_CIRCLE: "Circle Block",
+    OBJ_GLOW_FLAT: "Glow: Flat", OBJ_GLOW_CORNER: "Glow: Corner",
+    OBJ_GLOW_CORNER_INVERSE: "Glow: Corner (Inverse)",
 }
 
 CATEGORIES = {
@@ -185,7 +234,8 @@ CATEGORIES = {
     "Dangers": [OBJ_SPIKE, OBJ_HALF_SPIKE, OBJ_GROUND_SPIKE, OBJ_SAW_2, OBJ_SAW, OBJ_SAW_3],
     "Gameplay": [OBJ_PORTAL_CUBE, OBJ_PORTAL_SHIP, OBJ_PORTAL_BALL, OBJ_PORTAL_UFO, OBJ_PORTAL_WAVE, OBJ_PORTAL_GRAV_DOWN, OBJ_PORTAL_GRAV_UP, OBJ_PAD_YELLOW, OBJ_ORB_YELLOW, OBJ_PAD_PURPLE, OBJ_ORB_PURPLE, OBJ_PAD_BLUE, OBJ_ORB_BLUE, OBJ_SPAWN, OBJ_COLOR_TRIGGER, OBJ_GROUND_COLOR_TRIGGER, OBJ_END_TRIGGER,
                  OBJ_SPEED_05X, OBJ_SPEED_1X, OBJ_SPEED_2X, OBJ_SPEED_3X],
-    "Decor": [OBJ_GEAR_L, OBJ_GEAR_M, OBJ_GEAR_S, OBJ_DECO_SPIKE_L, OBJ_DECO_SPIKE_M, OBJ_DECO_CHAIN, OBJ_CLOUD_1, OBJ_CLOUD_2, OBJ_PULSEROD_1, OBJ_PULSEROD_2, OBJ_PULSEROD_3],
+    "Decor": [OBJ_GEAR_L, OBJ_GEAR_M, OBJ_GEAR_S, OBJ_DECO_SPIKE_L, OBJ_DECO_SPIKE_M, OBJ_DECO_CHAIN, OBJ_CLOUD_1, OBJ_CLOUD_2, OBJ_PULSEROD_1, OBJ_PULSEROD_2, OBJ_PULSEROD_3,
+               OBJ_GLOW_FLAT, OBJ_GLOW_CORNER, OBJ_GLOW_CORNER_INVERSE],
     "Pulse": [OBJ_PULSE_CIRCLE, OBJ_PULSE_HOLLOW, OBJ_PULSE_HEART, OBJ_PULSE_DIAMOND, OBJ_PULSE_STAR, OBJ_PULSE_NOTE]
 }
 

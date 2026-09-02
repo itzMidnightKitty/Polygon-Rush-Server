@@ -2,16 +2,107 @@ import pygame
 import math
 import config
 
+try:
+    from PIL import Image, ImageDraw, ImageFilter
+    _PIL_AVAILABLE = True
+except Exception:
+    # The auto-updater ships raw .py files with no dependency-install step, so
+    # a player who auto-updates to a version using PIL for the first time
+    # won't have it yet -- this must never crash the whole game (which a
+    # module-level import failure would, since every other object type in
+    # this file needs this module to import too). Glow just renders as
+    # nothing until the player runs `pip install pillow` / the game updates
+    # its own install some other way.
+    _PIL_AVAILABLE = False
+
+# Glow pieces: pure soft light -- a bright core (tinted by color_idx) fading
+# smoothly to fully transparent, no fill/silhouette of its own. Built with a
+# real Gaussian blur at a fixed supersample resolution and downscaled, rather
+# than layered pygame.draw shapes (pygame.draw with a translucent color
+# WRITES that alpha directly instead of compositing over what's already
+# there, so hand-layered "soft" circles just show visible banding/steps at
+# these small cell sizes -- a real blur doesn't). Blurring per-frame for
+# every visible glow object would be far too slow, so results are cached by
+# the parameters that actually determine the pixels.
+_GLOW_SUPERSAMPLE = 256
+_GLOW_BLUR_RADIUS = 40
+_GLOW_PEAK_ALPHA = 140
+_GLOW_CACHE = {}
+
+def _glow_tint(color, amt=0.65):
+    """Near-white core tinted toward the object's color."""
+    return tuple(min(255, int(c + (255 - c) * amt)) for c in color)
+
+def _glow_mask_flat(draw, ss):
+    draw.rectangle((0, ss * 0.55, ss, ss), fill=255)
+
+def _glow_mask_corner(draw, ss):
+    # Same 1x1-cell footprint as flat/inverse-corner -- anchored at the
+    # cell's own corner, with a radius small enough to fade out before
+    # reaching the cell's far edges instead of getting clipped there.
+    r = ss * 0.42
+    draw.ellipse((-r, ss - r, r, ss + r), fill=255)
+
+def _glow_mask_corner_inverse(draw, ss):
+    draw.rectangle((0, 0, ss, ss), fill=255)
+    r = 0.5 * ss
+    draw.ellipse((-r, -r, r, r), fill=0)
+
+_GLOW_MASK_FUNCS = {
+    "flat": _glow_mask_flat,
+    "corner": _glow_mask_corner,
+    "corner_inverse": _glow_mask_corner_inverse,
+}
+
+def _build_glow_surface(shape, w, h, color):
+    ss = _GLOW_SUPERSAMPLE
+    img = Image.new('L', (ss, ss), 0)
+    draw = ImageDraw.Draw(img)
+    _GLOW_MASK_FUNCS[shape](draw, ss)
+    img = img.filter(ImageFilter.GaussianBlur(radius=_GLOW_BLUR_RADIUS))
+    w, h = max(1, w), max(1, h)
+    img = img.resize((w, h), Image.LANCZOS)
+
+    tint = _glow_tint(color)
+    rgba = Image.new('RGBA', (w, h), (*tint, 0))
+    alpha = img.point(lambda v: int(v / 255 * _GLOW_PEAK_ALPHA))
+    rgba.putalpha(alpha)
+    return pygame.image.fromstring(rgba.tobytes(), (w, h), 'RGBA').convert_alpha()
+
+def _draw_glow(obj_surf, shape, w, h, color):
+    if not _PIL_AVAILABLE:
+        return
+    key = (shape, w, h, color)
+    cached = _GLOW_CACHE.get(key)
+    if cached is None:
+        cached = _build_glow_surface(shape, w, h, color)
+        _GLOW_CACHE[key] = cached
+    obj_surf.blit(cached, (0, 0))
+
 def sort_for_draw(objects):
     """Layer 0 draws last (on top); higher layers draw first (further back).
     Stable sort keeps relative insertion order within the same layer."""
     return sorted(objects, key=lambda o: getattr(o, 'layer', 0), reverse=True)
 
+# Any type here gets its on-screen size computed as "where the far edge
+# independently lands minus where the near edge independently lands" (see
+# size_override below) instead of "near edge position + size, both rounded
+# separately". Originally just for seamless tiling between adjacent same-type
+# cells, but it turns out to matter just as much for a SINGLE object that's
+# meant to sit flush against something drawn by an entirely separate code
+# path (the ground/ceiling line in graphics.py) -- int(pos)+int(size) and
+# int(pos+size) round independently and can land a pixel apart, which at
+# certain zoom/window-scale combinations (not just extreme ones -- close to
+# half of realistic combinations, per a fuzz test) shows up as e.g. a spike
+# floating a pixel above the ground it's mathematically flush with. Spikes
+# are default GRID_SIZE-sized just like the block types already here, so
+# adding them costs nothing and fixes exactly that.
 TILEABLE_TYPES = (config.OBJ_BLOCK, config.OBJ_HALF_BLOCK, config.OBJ_BLOCK_FADED, config.OBJ_BLOCK_BRICK,
                    config.OBJ_BLOCK_GRID, config.OBJ_BLOCK_BEVEL, config.OBJ_BLOCK_DOTS, config.OBJ_BLOCK_STRIPES,
                    config.OBJ_BLOCK_CROSS, config.OBJ_BLOCK_CIRCLE,
                    config.OBJ_OUTLINE_LINE, config.OBJ_OUTLINE_CORNER_PIXEL, config.OBJ_OUTLINE_3SIDE,
-                   config.OBJ_OUTLINE_OPPOSITE, config.OBJ_OUTLINE_CORNER2)
+                   config.OBJ_OUTLINE_OPPOSITE, config.OBJ_OUTLINE_CORNER2,
+                   config.OBJ_SPIKE, config.OBJ_HALF_SPIKE, config.OBJ_GROUND_SPIKE)
 
 # Rendered object surfaces are cached by their visual parameters (see
 # GameObject.get_surface) since the pixels never change frame-to-frame for a
@@ -223,8 +314,15 @@ class GameObject:
                 y = r * brick_h
                 pygame.draw.line(obj_surf, dark_brick, (0, y), (gz, y), lw)
             brick_w = gz // 2
+            # Row offset indexed by this cell's ABSOLUTE sub-row (4 per cell), not
+            # a bare 0-3 local to this cell -- otherwise every cell restarts its own
+            # offset/non-offset alternation from the same phase, so two cells
+            # stacked vertically meet with an offset row against a non-offset row
+            # (a visible seam in the brick bond pattern), same fix as
+            # OBJ_BLOCK_FADED's checker parity just above.
+            row0 = round(self.y / config.GRID_SIZE) * 4
             for r in range(4):
-                offset = (gz // 4) if r % 2 == 1 else 0
+                offset = (gz // 4) if (row0 + r) % 2 == 1 else 0
                 for c in range(3):
                     x = offset + c * brick_w - (brick_w if c==0 and offset>0 else 0)
                     if 0 < x < gz:
@@ -247,11 +345,18 @@ class GameObject:
             pygame.draw.polygon(obj_surf, c4, [(0,0), (0,gz), (gz//2, gz//2)])
         elif self.type == config.OBJ_BLOCK_DOTS:
             pygame.draw.rect(obj_surf, base_color, (0, 0, gz, gz))
-            dot_c = (max(0, base_color[0]-50), max(0, base_color[1]-50), max(0, base_color[2]-50))
-            step = gz // 4
-            for i in range(1, 4):
-                for j in range(1, 4):
-                    pygame.draw.circle(obj_surf, dot_c, (i*step, j*step), max(1, gz//14))
+            dot_c = (max(0, base_color[0]-55), max(0, base_color[1]-55), max(0, base_color[2]-55))
+            dot_hl = (min(255, base_color[0]+35), min(255, base_color[1]+35), min(255, base_color[2]+35))
+            n = 4
+            step = gz / n
+            r = max(1, int(step * 0.32))
+            for i in range(n):
+                for j in range(n):
+                    cx, cy = int((i + 0.5) * step), int((j + 0.5) * step)
+                    # embossed/bubble look: dark base circle + a small offset
+                    # highlight, instead of a single flat dark dot
+                    pygame.draw.circle(obj_surf, dot_c, (cx, cy), r)
+                    pygame.draw.circle(obj_surf, dot_hl, (cx - r * 0.3, cy - r * 0.3), max(1, int(r * 0.35)))
         elif self.type == config.OBJ_BLOCK_STRIPES:  # "Panel Block"
             pygame.draw.rect(obj_surf, base_color, (0, 0, w, h))
             dark_c = (max(0, base_color[0]-45), max(0, base_color[1]-45), max(0, base_color[2]-45))
@@ -268,8 +373,28 @@ class GameObject:
             pygame.draw.rect(obj_surf, cross_c, (0, gz//2 - cw//2, gz, cw))
         elif self.type == config.OBJ_BLOCK_CIRCLE:
             pygame.draw.rect(obj_surf, base_color, (0, 0, gz, gz))
-            circ_c = (max(0, base_color[0]-50), max(0, base_color[1]-50), max(0, base_color[2]-50))
-            pygame.draw.circle(obj_surf, circ_c, (gz//2, gz//2), int(gz*0.32))
+            # Classic seamless circle-tile motif: one ringed circle inscribed
+            # touching all 4 edges (so it's tangent to its neighbors' circles
+            # instead of leaving dead space between separate cells), plus a
+            # quarter-circle at each corner -- four of those meeting at a grid
+            # intersection combine into one more small circle there, same as
+            # traditional interlocking circle tiling.
+            dark = (max(0, base_color[0]-55), max(0, base_color[1]-55), max(0, base_color[2]-55))
+            mid = (min(255, base_color[0]+15), min(255, base_color[1]+15), min(255, base_color[2]+15))
+            darkest = (max(0, base_color[0]-80), max(0, base_color[1]-80), max(0, base_color[2]-80))
+            hl = (min(255, base_color[0]+45), min(255, base_color[1]+45), min(255, base_color[2]+45))
+            cx, cy = gz // 2, gz // 2
+            ring_w = max(1, int(gz * 0.045))
+            R = gz * 0.5
+            pygame.draw.circle(obj_surf, dark, (cx, cy), R)
+            pygame.draw.circle(obj_surf, mid, (cx, cy), R - ring_w)
+            pygame.draw.circle(obj_surf, darkest, (cx, cy), gz * 0.20)
+            pygame.draw.circle(obj_surf, hl, (cx - gz * 0.07, cy - gz * 0.07), max(1, gz * 0.06))
+            r2 = gz * 0.24
+            r2_ring = max(1, int(gz * 0.035))
+            for corner in ((0, 0), (gz, 0), (0, gz), (gz, gz)):
+                pygame.draw.circle(obj_surf, dark, corner, r2)
+                pygame.draw.circle(obj_surf, mid, corner, r2 - r2_ring)
         elif self.type == config.OBJ_OUTLINE_LINE:
             lw2 = max(2, int(5 * z_scale))
             pygame.draw.line(obj_surf, base_color, (0, lw2//2), (gz, lw2//2), lw2)
@@ -289,6 +414,12 @@ class GameObject:
             lw2 = max(2, int(5 * z_scale))
             pygame.draw.line(obj_surf, base_color, (0, lw2//2), (gz, lw2//2), lw2)
             pygame.draw.line(obj_surf, base_color, (lw2//2, 0), (lw2//2, gz), lw2)
+        elif self.type == config.OBJ_GLOW_FLAT:
+            _draw_glow(obj_surf, "flat", w, h, base_color)
+        elif self.type == config.OBJ_GLOW_CORNER:
+            _draw_glow(obj_surf, "corner", w, h, base_color)
+        elif self.type == config.OBJ_GLOW_CORNER_INVERSE:
+            _draw_glow(obj_surf, "corner_inverse", w, h, base_color)
         elif self.type == config.OBJ_SPIKE:
             pygame.draw.polygon(obj_surf, base_color, [(0, gz), (gz//2, 0), (gz, gz)])
             pygame.draw.polygon(obj_surf, outline_color, [(0, gz), (gz//2, 0), (gz, gz)], lw)

@@ -17,7 +17,7 @@ from graphics import draw_world_background, draw_world_ground, draw_difficulty_f
 from game_objects import sort_for_draw
 from discord_rpc import DiscordRPC
 
-CLIENT_VERSION = 3.5
+CLIENT_VERSION = 4.0
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -88,6 +88,11 @@ class Game:
                         first_user = list(self.saved_accounts.keys())[0]
                         self.network.login(first_user, self.saved_accounts[first_user], auto_login_cb)
                 threading.Thread(target=retry, daemon=True).start()
+            elif res.get("success") and self.network.username:
+                # Login only returns a token -- pull the account's saved icon/
+                # color choices too, or the game renders defaults until the
+                # player happens to open their Profile screen.
+                self.network.get_user_profile(self.network.username, lambda r: self.apply_own_icon_settings(r.get("data", {})) if r.get("success") else None)
 
         if last_logged_in and last_logged_in in self.saved_accounts:
             self.network.login(last_logged_in, self.saved_accounts[last_logged_in], auto_login_cb)
@@ -237,12 +242,21 @@ class Game:
         self.ignore_mouse_jump = True
         self.is_practice_mode = is_practice
         self.checkpoints = []
-        self.current_level.speed = getattr(config, 'SCROLL_SPEED', 6)
+        self.win_phase = None
+        self.win_particles = []
+        # Reset to the LEVEL's own configured starting speed (speed triggers
+        # mutate .speed live during a run, so a fresh play/restart needs to
+        # reset it back to something) -- not the hardcoded global default,
+        # which silently discarded whatever Starting Speed was set in Level
+        # Options on every single play.
+        self.current_level.speed = getattr(self.current_level, 'start_speed', self.current_level.speed)
         for obj in self.current_level.objects: obj.activated = False
-        
+
         if reset_attempts:
             self.attempts = 1
             
+        spawn_pts = self.current_level.get_spawn_points()
+        self.current_spawn_idx = len(spawn_pts) - 1 if spawn_pts else 0  # rightmost/default spawn
         spawn_x = self.current_level.get_spawn_x()
         self.player.reset(start_x=spawn_x, start_y=self.current_level.get_spawn_y(), start_mode=self.current_level.start_gamemode)
         self.state = "PLAY"
@@ -263,6 +277,31 @@ class Game:
                 offset = max(0.0, (spawn_x - 200) / (self.current_level.speed * config.FPS) + getattr(self.current_level, 'song_offset', 0.0))
                 self.audio.play_music(self.current_level.music, offset=offset)
         self.player.jump_held = pygame.key.get_pressed()[pygame.K_SPACE] or pygame.mouse.get_pressed()[0] or pygame.key.get_pressed()[pygame.K_UP]
+
+    def _spawn_win_particles(self, x, y):
+        import random, math
+        self.win_particles = []
+        colors = [config.P_COLOR, getattr(config, 'P_COLOR2', config.WHITE), config.WHITE]
+        for _ in range(28):
+            ang = random.uniform(0, math.tau)
+            speed = random.uniform(1.5, 5.5)
+            self.win_particles.append({
+                'x': x, 'y': y,
+                'vx': math.cos(ang) * speed, 'vy': math.sin(ang) * speed,
+                'life': random.randint(28, 44), 'max_life': 44,
+                'size': random.randint(3, 7),
+                'color': random.choice(colors),
+            })
+
+    def _update_win_particles(self):
+        particles = getattr(self, 'win_particles', None)
+        if not particles:
+            return
+        for p in particles:
+            p['x'] += p['vx']; p['y'] += p['vy']
+            p['vx'] *= 0.94; p['vy'] *= 0.94
+            p['life'] -= 1
+        self.win_particles = [p for p in particles if p['life'] > 0]
 
     def check_for_updates(self, silent=False):
         """Checks the server version and downloads+applies an update if one
@@ -473,6 +512,29 @@ class Game:
         if not os.path.exists(folder): os.makedirs(folder, exist_ok=True)
         return os.path.join(folder, 'credentials.json')
 
+    def apply_own_icon_settings(self, profile_data):
+        """Applies an account's saved icon/color choices to config.P_* --
+        these are what the game actually renders the player with, so this
+        must run right after ANY successful login (auto-login on launch,
+        manual login, switch-account), not only when the Profile screen
+        happens to be opened. It used to only run from load_profile(), which
+        meant a fresh launch rendered the default icon/colors until the
+        player manually visited their profile -- reported as 'icon changes
+        reset when restarting the game' (nothing was reset; the saved choice
+        just was never loaded back in)."""
+        try:
+            config.P_CUBE_IDX = profile_data["icon_cube"]
+            config.P_SHIP_IDX = profile_data["icon_ship"]
+            config.P_BALL_IDX = profile_data["icon_ball"]
+            config.P_WAVE_IDX = profile_data["icon_wave"]
+            config.P_UFO_IDX = profile_data.get("icon_ufo", 0)
+            r, g, b = map(int, profile_data["color1"].split(','))
+            config.P_COLOR = (r, g, b)
+            r2, g2, b2 = map(int, profile_data["color2"].split(','))
+            config.P_COLOR2 = (r2, g2, b2)
+        except Exception:
+            pass
+
     def load_profile(self, target_user=None):
         self.profile_user = target_user or self.network.username
         self.profile_data = None
@@ -490,17 +552,7 @@ class Game:
                 # previously logged-in account after switching accounts.
                 if self.profile_data["username"] == self.network.username:
                     self.my_profile_data = self.profile_data
-                    config.P_CUBE_IDX = self.profile_data["icon_cube"]
-                    config.P_SHIP_IDX = self.profile_data["icon_ship"]
-                    config.P_BALL_IDX = self.profile_data["icon_ball"]
-                    config.P_WAVE_IDX = self.profile_data["icon_wave"]
-                    config.P_UFO_IDX = self.profile_data.get("icon_ufo", 0)
-                    try:
-                        r, g, b = map(int, self.profile_data["color1"].split(','))
-                        config.P_COLOR = (r, g, b)
-                        r2, g2, b2 = map(int, self.profile_data["color2"].split(','))
-                        config.P_COLOR2 = (r2, g2, b2)
-                    except: pass
+                    self.apply_own_icon_settings(self.profile_data)
             else:
                 self.profile_msg = "User not found."
         self.network.get_user_profile(self.profile_user, cb)
@@ -631,7 +683,28 @@ class Game:
             pygame.draw.rect(self.screen, (30, 30, 40), p_rect, 0, S(10))
             pygame.draw.rect(self.screen, config.CYAN, p_rect, max(1, S(2)), S(10))
         
-            if self.active_popup == "rate":
+            if self.active_popup == "change_password":
+                t = self.title_font.render("Change Password", True, config.WHITE)
+                self.screen.blit(t, (p_rect.centerx - t.get_width()//2, p_rect.y + S(20)))
+
+                hint = self.font.render("You're signed in, so no old password needed.", True, config.GRAY)
+                self.screen.blit(hint, (p_rect.centerx - hint.get_width()//2, p_rect.y + S(65)))
+
+                field_rect = pygame.Rect(p_rect.x + S(40), p_rect.y + S(110), p_rect.width - S(80), S(40))
+                pygame.draw.rect(self.screen, (20, 20, 28), field_rect, 0, S(5))
+                pygame.draw.rect(self.screen, config.WHITE, field_rect, max(1, S(2)), S(5))
+                masked = "*" * len(getattr(self, 'pw_input_text', ''))
+                pw_txt = self.font.render(masked or "New password...", True, config.WHITE if masked else config.GRAY)
+                self.screen.blit(pw_txt, (field_rect.x + S(10), field_rect.centery - pw_txt.get_height()//2))
+
+                if getattr(self, 'pw_msg', ''):
+                    msg_color = config.GREEN if "changed" in self.pw_msg.lower() else config.RED
+                    mt = self.font.render(self.pw_msg, True, msg_color)
+                    self.screen.blit(mt, (p_rect.centerx - mt.get_width()//2, p_rect.y + S(165)))
+
+                hint2 = self.font.render("Press ENTER to confirm, ESC to cancel", True, config.GRAY)
+                self.screen.blit(hint2, (p_rect.centerx - hint2.get_width()//2, p_rect.y + S(220)))
+            elif self.active_popup == "rate":
                 t = self.title_font.render("Rate Level", True, config.WHITE)
                 self.screen.blit(t, (p_rect.centerx - t.get_width()//2, p_rect.y + S(20)))
                 for i in range(1, 11):
@@ -853,6 +926,41 @@ class Game:
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mouse_just_pressed = True
 
+                if getattr(self, 'active_popup', None) == "change_password":
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            self.active_popup = None
+                            self.audio.play_sfx('button.mp3')
+                        elif event.key == pygame.K_BACKSPACE:
+                            self.pw_input_text = self.pw_input_text[:-1]
+                        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                            if len(self.pw_input_text) >= 4:
+                                new_pw = self.pw_input_text
+                                def cb_pw(res, new_pw=new_pw):
+                                    if res.get("success"):
+                                        self.pw_msg = "Password changed!"
+                                        # Keep auto-login working -- it re-sends whatever's
+                                        # saved locally, which would otherwise still be the
+                                        # OLD password after this.
+                                        username = self.network.username
+                                        if username:
+                                            self.saved_accounts[username] = new_pw
+                                            try:
+                                                with open(self.get_credentials_path(), "w", encoding="utf-8") as f:
+                                                    data_str = json.dumps({"username": username, "password": new_pw})
+                                                    f.write(base64.b64encode(data_str.encode('utf-8')).decode('utf-8'))
+                                            except Exception:
+                                                pass
+                                        self.active_popup = None
+                                    else:
+                                        self.pw_msg = f"Failed: {res.get('error', 'Unknown error')}"
+                                self.network.change_password(new_pw, cb_pw)
+                            else:
+                                self.pw_msg = "Password must be at least 4 characters."
+                        elif event.unicode and event.unicode.isprintable() and len(self.pw_input_text) < 40:
+                            self.pw_input_text += event.unicode
+                    continue
+
                 if getattr(self, 'active_popup', None) == "switch_account":
                     if scroll_y_dir != 0:
                         self.switch_scroll = getattr(self, 'switch_scroll', 0) - scroll_y_dir
@@ -991,6 +1099,7 @@ class Game:
                                     self.state = "MENU"
                                     self.online_status_msg = ""
                                     self.load_levels_list(self.get_custom_levels_dir())
+                                    self.network.get_user_profile(self.network.username, lambda r: self.apply_own_icon_settings(r.get("data", {})) if r.get("success") else None)
                                     try:
                                         with open(self.get_credentials_path(), "w", encoding="utf-8") as f:
                                             data_str = json.dumps({"username": self.network.username, "password": self.login_password_input.text})
@@ -1473,7 +1582,18 @@ class Game:
                         k_btn = pygame.Rect(config.BASE_W//2 - 150, config.BASE_H//4 + 220, 300, 35)
                         if k_btn.collidepoint(logical_mouse):
                             self.state = "KEYBINDS"; self.audio.play_sfx('button.mp3')
-                            
+
+                        cl_btn = pygame.Rect(config.BASE_W//2 - 150, config.BASE_H//4 + 265, 300, 35)
+                        if cl_btn.collidepoint(logical_mouse):
+                            self.state = "CHANGELOG"; self.changelog_scroll = 0; self.audio.play_sfx('button.mp3')
+
+                        pw_btn = pygame.Rect(config.BASE_W//2 - 150, config.BASE_H//4 + 310, 300, 35)
+                        if pw_btn.collidepoint(logical_mouse) and self.network.token:
+                            self.active_popup = "change_password"
+                            self.pw_input_text = ""
+                            self.pw_msg = ""
+                            self.audio.play_sfx('button.mp3')
+
                         m_y = config.BASE_H//4 + 60
                         if pygame.Rect(config.BASE_W//2 + 50, m_y - 5, 30, 30).collidepoint(logical_mouse):
                             self.audio.music_vol = max(0.0, round(self.audio.music_vol - 0.05, 2)); self.audio.update_volumes(); self.audio.play_sfx('button.mp3')
@@ -1489,6 +1609,12 @@ class Game:
                 elif self.state == "KEYBINDS":
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         self.state = "SETTINGS"; self.audio.play_sfx('button.mp3')
+
+                elif self.state == "CHANGELOG":
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                        self.state = "SETTINGS"; self.audio.play_sfx('button.mp3')
+                    elif scroll_y_dir != 0:
+                        self.changelog_scroll = max(0, getattr(self, 'changelog_scroll', 0) - scroll_y_dir * 30)
                         
                 elif self.state in ("MAIN_LEVELS", "CUSTOM_LEVELS"):
                     is_main = (self.state == "MAIN_LEVELS")
@@ -1554,8 +1680,16 @@ class Game:
                         # normal/verify play, matching a real attempt from a real start.
                         if getattr(self, 'is_practice_mode', False) and not getattr(self, 'is_paused', False):
                             direction = -1 if event.key in (pygame.K_a, pygame.K_LEFT) else 1
-                            target = self.current_level.get_closest_spawn(self.player.x, direction)
-                            if target:
+                            # Cycles a tracked index through the spawn list, not a lookup
+                            # from the player's live position -- position-based lookup broke
+                            # the moment you'd actually moved (walked past a spawn, or
+                            # already switched once), since "closest spawn left/right of
+                            # wherever I've walked to" isn't "the next one in the list" and
+                            # stops finding anything in one direction long before the other.
+                            spawn_pts = self.current_level.get_spawn_points()
+                            if len(spawn_pts) >= 2:
+                                self.current_spawn_idx = (getattr(self, 'current_spawn_idx', len(spawn_pts) - 1) + direction) % len(spawn_pts)
+                                target = spawn_pts[self.current_spawn_idx]
                                 self.player.reset(start_x=target[0], start_y=target[1], start_mode=self.current_level.start_gamemode)
                                 self.checkpoints = []
                                 if hasattr(self, 'camera_y'): delattr(self, 'camera_y')
@@ -2048,8 +2182,55 @@ class Game:
                 pygame.draw.rect(self.screen, config.GRAY if k_hover else config.DARK_GRAY, k_btn)
                 pygame.draw.rect(self.screen, config.WHITE, k_btn, max(1, S(2)))
                 self.screen.blit(self.font.render("View Editor Keybinds", True, config.WHITE), (k_btn.x + S(60), k_btn.y + S(6)))
-                
+
+                cl_btn = pygame.Rect(S(config.BASE_W//2 - 150), S(config.BASE_H//4 + 265), S(300), S(35))
+                cl_hover = pygame.Rect(config.BASE_W//2 - 150, config.BASE_H//4 + 265, 300, 35).collidepoint(logical_mouse)
+                pygame.draw.rect(self.screen, config.GRAY if cl_hover else config.DARK_GRAY, cl_btn)
+                pygame.draw.rect(self.screen, config.WHITE, cl_btn, max(1, S(2)))
+                self.screen.blit(self.font.render("View Changelog", True, config.WHITE), (cl_btn.x + S(80), cl_btn.y + S(6)))
+
+                if self.network.token:
+                    pw_btn = pygame.Rect(S(config.BASE_W//2 - 150), S(config.BASE_H//4 + 310), S(300), S(35))
+                    pw_hover = pygame.Rect(config.BASE_W//2 - 150, config.BASE_H//4 + 310, 300, 35).collidepoint(logical_mouse)
+                    pygame.draw.rect(self.screen, config.GRAY if pw_hover else config.DARK_GRAY, pw_btn)
+                    pygame.draw.rect(self.screen, config.WHITE, pw_btn, max(1, S(2)))
+                    self.screen.blit(self.font.render("Change Password", True, config.WHITE), (pw_btn.x + S(70), pw_btn.y + S(6)))
+
                 self.screen.blit(self.font.render("Press ESC to Return", True, config.GRAY), (S(config.BASE_W//2 - 80), S(config.BASE_H - 100)))
+
+            elif self.state == "CHANGELOG":
+                title = self.title_font.render("CHANGELOG", True, config.CYAN)
+                self.screen.blit(title, (S(config.BASE_W//2) - title.get_width()//2, S(40)))
+
+                clip_rect = pygame.Rect(S(config.BASE_W//2 - 350), S(110), S(700), S(config.BASE_H - 180))
+                self.screen.set_clip(clip_rect)
+                scroll = getattr(self, 'changelog_scroll', 0)
+                y = S(120) - scroll
+                for version, bullets in config.CHANGELOG:
+                    vt = self.font.render(f"v{version}", True, config.YELLOW)
+                    self.screen.blit(vt, (S(config.BASE_W//2 - 350), y))
+                    y += S(28)
+                    for b in bullets:
+                        words = b.split(' ')
+                        line = ""
+                        wrapped = []
+                        for w in words:
+                            trial = (line + " " + w).strip()
+                            if self.font.size(trial)[0] > S(660):
+                                wrapped.append(line); line = w
+                            else:
+                                line = trial
+                        if line: wrapped.append(line)
+                        for i, wline in enumerate(wrapped):
+                            prefix = "- " if i == 0 else "  "
+                            bt = self.font.render(prefix + wline, True, config.WHITE)
+                            self.screen.blit(bt, (S(config.BASE_W//2 - 340), y))
+                            y += S(24)
+                    y += S(14)
+                self.changelog_content_height = y - (S(120) - scroll)
+                self.screen.set_clip(None)
+
+                self.screen.blit(self.font.render("Press ESC to Return  |  Scroll to view more", True, config.GRAY), (S(config.BASE_W//2 - 140), S(config.BASE_H - 60)))
 
             elif self.state == "KEYBINDS":
                 title = self.title_font.render("EDITOR CONTROLS", True, config.CYAN)
@@ -2145,8 +2326,33 @@ class Game:
                 play_zoom = 2.0 
                 
                 is_paused = getattr(self, 'is_paused', False)
-                
-                if not self.player.dead and not self.player.won and not is_paused:
+
+                if getattr(self, 'win_phase', None) and not is_paused:
+                    self.win_timer += 1
+                    DECEL_FRAMES, PULLIN_FRAMES = 24, 18  # ~0.4s + ~0.3s at 60fps
+                    if self.win_phase == "decel":
+                        t = min(1.0, self.win_timer / DECEL_FRAMES)
+                        ease = 1 - (1 - t) ** 2  # ease-out: fast at first, gentles into the stop
+                        self.current_level.speed = self.win_start_speed * (1 - ease)
+                        self.player.x += self.current_level.speed
+                        self.player.vel_y *= 0.85  # settle out any vertical bob/fall
+                        if t >= 1.0:
+                            self.win_phase = "pullin"
+                            self.win_timer = 0
+                            self.win_pullin_start_x = self.player.x
+                            self.win_pullin_start_y = self.player.y
+                            self._spawn_win_particles(self.win_wall_x, self.player.y + self.player.height / 2)
+                    elif self.win_phase == "pullin":
+                        t = min(1.0, self.win_timer / PULLIN_FRAMES)
+                        ease = t * t * (3 - 2 * t)  # smoothstep: eased in, eased to a stop at the wall
+                        self.player.x = self.win_pullin_start_x + (self.win_wall_x - self.win_pullin_start_x) * ease
+                        self.player.rotation += 22
+                        if t >= 1.0:
+                            self.win_phase = None
+                            self.player.won = True
+                    self._update_win_particles()
+
+                if not self.player.dead and not self.player.won and not getattr(self, 'win_phase', None) and not is_paused:
                     config.apply_speed_triggers(self.current_level.objects, self.player.x, self.current_level)
                     self.player.update(keys, self.current_level.objects, self.current_level.speed, ignore_mouse=getattr(self, 'ignore_mouse_jump', False))
                     
@@ -2160,8 +2366,18 @@ class Game:
                             self.current_level.normal_best = progress
                             self.save_level_progress(self.current_level, 'normal_best', progress)
                     
-                    if self.player.x > self.current_level.end_x:
-                        self.player.won = True; self.audio.stop_music(); self.audio.play_sfx('win.mp3')
+                    if self.player.x > self.current_level.end_x and not getattr(self, 'win_phase', None):
+                        # Completion is a short scripted sequence, not an instant
+                        # cut -- see the win_phase block below -- rather than
+                        # setting player.won (which stops normal updates and pops
+                        # the completion menu) immediately. Music deliberately
+                        # keeps playing through all of this; it only stops once
+                        # the player actually leaves via the completion menu.
+                        self.win_phase = "decel"
+                        self.win_timer = 0
+                        self.win_start_speed = self.current_level.speed
+                        self.win_wall_x = self.current_level.end_x + 90
+                        self.audio.play_sfx('win.mp3')
                         if getattr(self.current_level, 'folder', '') == 'online' and hasattr(self.current_level, 'online_version_id'):
                             self.network.complete_level_version(self.current_level.online_version_id, lambda r: None)
                         elif not self.is_practice_mode:
@@ -2193,7 +2409,7 @@ class Game:
                                 self.current_level.speed = c.get('speed', getattr(config, 'SCROLL_SPEED', 6))
                             else:
                                 self.player.reset(start_x=self.current_level.get_spawn_x(), start_y=self.current_level.get_spawn_y(), start_mode=self.current_level.start_gamemode)
-                                self.current_level.speed = getattr(config, 'SCROLL_SPEED', 6)
+                                self.current_level.speed = getattr(self.current_level, 'start_speed', self.current_level.speed)
                             for obj in self.current_level.objects:
                                 obj.activated = getattr(obj, 'x', 0) <= self.player.x
                             if hasattr(self, 'camera_y'): delattr(self, 'camera_y')
@@ -2265,8 +2481,51 @@ class Game:
                         pygame.draw.polygon(self.screen, config.WHITE, pts, max(1, int(1*play_zoom*config.get_scale())))
                         
                 draw_world_ground(self.screen, camera_x, self.camera_y, play_zoom, current_gnd, self.current_level.ground_design, self.player.mode)
+
+                if getattr(self, 'win_phase', None) or self.player.won:
+                    # A bright end-wall marking the level's actual finish line,
+                    # visible through the whole completion sequence (and the
+                    # completion menu after) rather than the level just cutting
+                    # to a popup with nothing shown of where it ended.
+                    z = play_zoom * config.get_scale()
+                    wall_x = int((self.current_level.end_x - camera_x) * z)
+                    if -50 < wall_x < config.RENDER_W + 50:
+                        wall_color = config.P_COLOR
+                        pygame.draw.line(self.screen, wall_color, (wall_x, 0), (wall_x, config.RENDER_H), max(2, S(6)))
+                        glow_surf = pygame.Surface((max(1, S(40)), config.RENDER_H), pygame.SRCALPHA)
+                        for i in range(S(40), 0, -2):
+                            a = int(60 * (1 - i / max(1, S(40))))
+                            pygame.draw.line(glow_surf, (*wall_color, a), (i, 0), (i, config.RENDER_H), 2)
+                        self.screen.blit(glow_surf, (wall_x - S(40), 0))
+
+                for p in getattr(self, 'win_particles', None) or []:
+                    z = play_zoom * config.get_scale()
+                    px = int((p['x'] - camera_x) * z)
+                    py = int((p['y'] - self.camera_y) * z)
+                    alpha = max(0, min(255, int(255 * p['life'] / p['max_life'])))
+                    sz = max(1, S(p['size']))
+                    particle_surf = pygame.Surface((sz, sz), pygame.SRCALPHA)
+                    particle_surf.fill((*p['color'], alpha))
+                    self.screen.blit(particle_surf, (px - sz // 2, py - sz // 2))
+
                 self.player.draw(self.screen, camera_x, self.camera_y, play_zoom)
-                
+
+                if self.player.dead:
+                    # The actual hitbox death is judged against (see player.py's
+                    # core_rect) is smaller than the full sprite -- show it while
+                    # frozen on death so it's clear exactly what was touched,
+                    # rather than just the visual sprite silhouette.
+                    core_w = self.player.width - int(self.player.width * 0.4)
+                    core_h = self.player.height - int(self.player.height * 0.4)
+                    core_x = self.player.x + (self.player.width - core_w) / 2
+                    core_y = self.player.y + (self.player.height - core_h) / 2
+                    z = play_zoom * config.get_scale()
+                    hb_x = int((core_x - camera_x) * z)
+                    hb_y = int((core_y - self.camera_y) * z)
+                    hb_w = max(1, int((core_x + core_w - camera_x) * z) - hb_x)
+                    hb_h = max(1, int((core_y + core_h - self.camera_y) * z) - hb_y)
+                    pygame.draw.rect(self.screen, config.RED, (hb_x, hb_y, hb_w, hb_h), max(1, S(2)))
+
                 live_prog = max(0, min(100, int((self.player.x - 200) / max(1, self.current_level.end_x - 200) * 100)))
                 bar_w = S(300)
                 bar_rect = pygame.Rect(S(config.BASE_W//2) - bar_w//2, S(15), bar_w, S(15))
@@ -2313,6 +2572,7 @@ class Game:
                             if exit_btn.collidepoint(logical_mouse):
                                 self.player.won = False
                                 self.ignore_mouse_jump = True
+                                self.audio.stop_music()  # kept playing through the completion menu; stops only on actually leaving
                                 if getattr(self.current_level, 'folder', '') == 'levels/official':
                                     self.state = "MAIN_LEVELS"
                                 elif getattr(self.current_level, 'folder', '') == self.get_custom_levels_dir():
@@ -2346,6 +2606,7 @@ class Game:
                             if exit_btn.collidepoint(logical_mouse):
                                 self.player.won = False
                                 self.ignore_mouse_jump = True
+                                self.audio.stop_music()  # kept playing through the completion menu; stops only on actually leaving
                                 if getattr(self.current_level, 'folder', '') == 'levels/official':
                                     self.state = "MAIN_LEVELS"
                                 elif getattr(self.current_level, 'folder', '') == self.get_custom_levels_dir():

@@ -127,6 +127,11 @@ class NetworkManager:
         t.daemon = True
         t.start()
 
+    def change_password(self, new_password, callback):
+        t = threading.Thread(target=self._make_request, args=("POST", "/users/me/password", {"new_password": new_password}, callback))
+        t.daemon = True
+        t.start()
+
     def upload_level(self, title, data_str, suggested_difficulty, level_id=None, callback=None):
         payload = {
             "title": title,
