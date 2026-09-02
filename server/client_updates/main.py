@@ -17,7 +17,7 @@ from graphics import draw_world_background, draw_world_ground, draw_difficulty_f
 from game_objects import sort_for_draw
 from discord_rpc import DiscordRPC
 
-CLIENT_VERSION = 3.2
+CLIENT_VERSION = 3.5
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -26,7 +26,7 @@ def init_folders():
 class Game:
     def __init__(self):
         pygame.init()
-        self.apply_resolution()
+        self.apply_resolution(initial=True)
         pygame.display.set_caption("Polygon Rush")
         self.clock = pygame.time.Clock()
         self.audio = AudioManager()
@@ -97,6 +97,72 @@ class Game:
         
         self.audio.play_menu_music()
 
+    def get_progress_store_path(self):
+        """Per-account file tracking each player's own normal/practice best-%
+        per level. This must live OUTSIDE any level file: normal_best/
+        practice_best used to be saved directly into the level's own JSON
+        (Level.save()), which is shared/distributed content -- so a creator
+        play-testing their own upload baked their personal progress into the
+        file, and every other player who then downloaded it inherited those
+        numbers as if they were their own completion. Progress is inherently
+        per-player, so it's tracked here instead, never written into a level
+        file that gets shared."""
+        username = getattr(self.network, 'username', None) or "guest"
+        username = "".join(c for c in username if c.isalnum() or c in ('_', '-'))
+        docs = os.path.join(os.path.expanduser('~'), 'Documents', 'PolygonRush', username)
+        os.makedirs(docs, exist_ok=True)
+        return os.path.join(docs, 'level_progress.json')
+
+    def _progress_key_for_level(self, level):
+        online_id = getattr(level, 'online_version_id', None)
+        if online_id:
+            return f"online::{online_id}"
+        filename = getattr(level, 'filename', None)
+        if filename:
+            return f"{getattr(level, 'folder', '')}::{filename}"
+        return f"name::{getattr(level, 'name', 'unknown')}"
+
+    def load_level_progress(self, level):
+        """Overwrites level.normal_best/practice_best with THIS player's own
+        recorded progress (0 if never played), discarding whatever values
+        came embedded in the level file itself -- those belong to whoever
+        saved that file, not necessarily the player loading it now."""
+        level.normal_best = 0
+        level.practice_best = 0
+        try:
+            path = self.get_progress_store_path()
+            if not os.path.exists(path):
+                return
+            with open(path, 'r', encoding='utf-8') as f:
+                store = json.load(f)
+            entry = store.get(self._progress_key_for_level(level))
+            if entry:
+                level.normal_best = entry.get('normal_best', 0)
+                level.practice_best = entry.get('practice_best', 0)
+        except Exception:
+            pass
+
+    def save_level_progress(self, level, mode, value):
+        """mode is 'normal_best' or 'practice_best'. Updates only this one
+        player's local progress record -- never touches the level file."""
+        try:
+            path = self.get_progress_store_path()
+            store = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        store = json.load(f)
+                except Exception:
+                    store = {}
+            key = self._progress_key_for_level(level)
+            entry = store.get(key, {})
+            entry[mode] = value
+            store[key] = entry
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(store, f)
+        except Exception:
+            pass
+
     def get_custom_levels_dir(self):
         username = getattr(self.network, 'username', None)
         if not username:
@@ -108,7 +174,23 @@ class Game:
             os.makedirs(path, exist_ok=True)
         return path
 
-    def apply_resolution(self):
+    def apply_resolution(self, initial=False):
+        if initial:
+            # RENDER_W/H default to 1920x1080. On a monitor that's exactly
+            # that size (a very common resolution), a plain RESIZABLE window
+            # at that exact size ends up with no room left for its own title
+            # bar/borders -- effectively edge-to-edge like fullscreen, with
+            # the top of the UI pushed off-screen. Clamp the *initial* window
+            # to comfortably fit the actual desktop; later resizes (dragging,
+            # maximizing) are left alone since those already reflect whatever
+            # size the OS actually allowed.
+            try:
+                desktop_w, desktop_h = pygame.display.get_desktop_sizes()[0]
+                config.RENDER_W = min(config.RENDER_W, int(desktop_w * 0.9))
+                config.RENDER_H = min(config.RENDER_H, int(desktop_h * 0.85))
+                config.BASE_W = int(config.BASE_H * (config.RENDER_W / config.RENDER_H))
+            except Exception:
+                pass
         self.screen = pygame.display.set_mode((config.RENDER_W, config.RENDER_H), pygame.RESIZABLE)
         self.font = pygame.font.SysFont("Arial", S(18), bold=True)
         self.title_font = pygame.font.SysFont("Arial", S(36), bold=True)
@@ -151,6 +233,7 @@ class Game:
             self.current_level = online_level
         else:
             self.current_level = Level(filename, folder)
+        self.load_level_progress(self.current_level)
         self.ignore_mouse_jump = True
         self.is_practice_mode = is_practice
         self.checkpoints = []
@@ -2071,11 +2154,11 @@ class Game:
                     if self.is_practice_mode:
                         if progress > self.current_level.practice_best:
                             self.current_level.practice_best = progress
-                            self.current_level.save(self.current_level.filename, self.current_level.folder)
+                            self.save_level_progress(self.current_level, 'practice_best', progress)
                     else:
                         if progress > self.current_level.normal_best:
                             self.current_level.normal_best = progress
-                            self.current_level.save(self.current_level.filename, self.current_level.folder)
+                            self.save_level_progress(self.current_level, 'normal_best', progress)
                     
                     if self.player.x > self.current_level.end_x:
                         self.player.won = True; self.audio.stop_music(); self.audio.play_sfx('win.mp3')

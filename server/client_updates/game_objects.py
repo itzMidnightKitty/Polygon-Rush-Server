@@ -13,6 +13,13 @@ TILEABLE_TYPES = (config.OBJ_BLOCK, config.OBJ_HALF_BLOCK, config.OBJ_BLOCK_FADE
                    config.OBJ_OUTLINE_LINE, config.OBJ_OUTLINE_CORNER_PIXEL, config.OBJ_OUTLINE_3SIDE,
                    config.OBJ_OUTLINE_OPPOSITE, config.OBJ_OUTLINE_CORNER2)
 
+# Rendered object surfaces are cached by their visual parameters (see
+# GameObject.get_surface) since the pixels never change frame-to-frame for a
+# given type/rotation/color/etc combo. A simple size cap keeps a long editing
+# session across many different levels/colors from growing this unbounded.
+_SURFACE_CACHE = {}
+_SURFACE_CACHE_LIMIT = 6000
+
 class GameObject:
     def __init__(self, type, x, y, rotation=0, color_idx=0, flip_x=False, flip_y=False, bpm=60, layer=0, **kwargs):
         self.type = type
@@ -131,6 +138,26 @@ class GameObject:
         self.rect = pygame.Rect(ox, oy, w, h)
 
     def get_surface(self, zoom=1.0, highlight=False, size_override=None):
+        # A given object's rendered pixels are fully determined by its visual
+        # parameters (type/rotation/color/flip/zoom/size), never by the frame
+        # number -- but this used to rebuild the surface from scratch, with a
+        # fresh pygame.Surface + a batch of draw calls, on EVERY single draw
+        # call for EVERY visible object, every frame. That's the "lag when
+        # new parts of the level scroll into view" report: previously-seen
+        # object combos already paid that cost, newly-visible ones hadn't.
+        # Cached here instead, keyed by everything the pixels actually depend
+        # on. OBJ_BLOCK_FADED's checkerboard also depends on absolute grid
+        # position (for seamless parity across tiles), so its position parity
+        # is folded into the key too -- harmless for every other type.
+        parity_key = None
+        if self.type == config.OBJ_BLOCK_FADED:
+            parity_key = (round(self.x / config.GRID_SIZE) % 2, round(self.y / config.GRID_SIZE) % 2)
+        cache_key = (self.type, self.rotation, self.color_idx, self.flip_x, self.flip_y,
+                     round(zoom, 3), highlight, size_override, parity_key)
+        cached = _SURFACE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         if self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP,
                          config.OBJ_SPEED_05X, config.OBJ_SPEED_1X, config.OBJ_SPEED_2X, config.OBJ_SPEED_3X):
             sw, sh = config.GRID_SIZE, config.GRID_SIZE * 3
@@ -433,7 +460,9 @@ class GameObject:
 
         if self.rotation != 0 and self.type not in config.NON_ROTATABLE:
             obj_surf = pygame.transform.rotate(obj_surf, -self.rotation)
-            
+
+        if len(_SURFACE_CACHE) < _SURFACE_CACHE_LIMIT:
+            _SURFACE_CACHE[cache_key] = obj_surf
         return obj_surf
 
     def draw(self, surface, scroll_x, scroll_y, zoom=1.0, highlight=False, alpha=255):
@@ -465,6 +494,11 @@ class GameObject:
 
         obj_surf = self.get_surface(zoom, highlight, size_override=size_override)
         if alpha < 255:
+            # set_alpha() mutates in place -- obj_surf may be the cached master
+            # shared by every other object with the same visual params, so a
+            # copy is needed here or a dimmed layer-preview object would leave
+            # every full-alpha object using that same combo dimmed too.
+            obj_surf = obj_surf.copy()
             obj_surf.set_alpha(alpha)
 
         if self.type in (config.OBJ_SAW, config.OBJ_SAW_2, config.OBJ_SAW_3, config.OBJ_GEAR_L, config.OBJ_GEAR_M, config.OBJ_GEAR_S):

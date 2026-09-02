@@ -162,7 +162,12 @@ class Player:
         # (classic "hitbox is smaller than the sprite" feel), while genuinely touching it
         # still kills. Non-death collision resolution (landing, ground/roof clamping) still
         # uses the full outer rect so standing/sliding still looks correctly flush.
-        core_rect = self.rect.inflate(-16, -16)
+        # Shrink is proportional to the mode's own size (40%, matching cube's original
+        # fixed -16 out of its 40px size exactly) rather than a flat -16px -- a flat
+        # shrink collapses to zero (or negative) on a thin hitbox like ship's 16px
+        # height, which silently disabled ITS wall-death check entirely (the reported
+        # "ship clips through vertical walls without dying").
+        core_rect = self.rect.inflate(-int(self.width * 0.4), -int(self.height * 0.4))
         for obj in objects:
             if obj.is_solid() and self.rect.colliderect(obj.rect):
                 if self.mode == "wave":

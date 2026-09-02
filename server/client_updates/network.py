@@ -18,14 +18,21 @@ class NetworkManager:
             if self.token:
                 headers["Authorization"] = f"Bearer {self.token}"
                 
+            # 120s, not 60s: the server is on Render's free tier, which spins
+            # down when idle and can take 30-90s+ to cold-start on the next
+            # request. A 60s timeout could fire before a cold-started request
+            # (upload especially) ever finishes server-side -- the client
+            # reports failure while the server keeps processing and completes
+            # it anyway, which is exactly "upload sometimes fails, but the
+            # level is there if you check again a bit later."
             if method == "GET":
-                response = requests.get(url, headers=headers, params=data, timeout=60)
+                response = requests.get(url, headers=headers, params=data, timeout=120)
             elif method == "POST":
-                response = requests.post(url, headers=headers, json=data, timeout=60)
+                response = requests.post(url, headers=headers, json=data, timeout=120)
             elif method == "PUT":
-                response = requests.put(url, headers=headers, json=data, timeout=60)
+                response = requests.put(url, headers=headers, json=data, timeout=120)
             elif method == "DELETE":
-                response = requests.delete(url, headers=headers, timeout=60)
+                response = requests.delete(url, headers=headers, timeout=120)
                 
             result = {
                 "success": response.status_code in (200, 201),

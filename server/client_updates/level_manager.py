@@ -77,6 +77,7 @@ class Level:
             self.music = data.get("music", None)
             self.ng_song_id = data.get("ng_song_id", None)
             self.ng_song_name = data.get("ng_song_name", None)
+            self.song_offset = data.get("song_offset", 0.0)
             if "song_data" in data and self.music:
                 audio_path = os.path.join("audio", "music", self.music)
                 if not os.path.exists(audio_path):
@@ -133,8 +134,13 @@ class Level:
             "bg_design": self.bg_design,
             "ground_design": self.ground_design,
             "difficulty": self.difficulty,
-            "normal_best": self.normal_best,
-            "practice_best": self.practice_best,
+            # normal_best/practice_best deliberately NOT saved here -- this is
+            # shared/distributable level content, and progress is per-player.
+            # It used to be saved into the level file itself, which meant a
+            # creator play-testing their own upload baked their own progress
+            # in, and everyone who downloaded it inherited those numbers as
+            # if they were their own. Progress now lives in a separate
+            # per-account store (see Game.get_progress_store_path in main.py).
             "verified": self.verified,
             "noclip": self.noclip,
             "objects": [o.to_dict() for o in self.objects]
