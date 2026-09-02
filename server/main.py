@@ -596,7 +596,7 @@ def get_comments(level_id: str, db: Session = Depends(get_db)):
 # --- UPDATER ROUTES ---
 @app.get("/version")
 def check_version():
-    return {"success": True, "version": 4.0}
+    return {"success": True, "version": 4.1}
 
 @app.get("/download_update")
 def download_update(file: str = "main.py"):

@@ -3,6 +3,21 @@ import os
 import config
 from game_objects import GameObject
 
+def _migrate_half_block_rotation(objects, data):
+    """Half Block's default (rotation 0) orientation was flipped 180 degrees
+    (bottom half -> top half). A level saved before that change stored
+    rotations that assumed the OLD mapping, so without this they'd silently
+    render/collide as the wrong half. Levels saved AFTER the change carry the
+    'half_block_v2' marker (see Level.save()) and are left alone; anything
+    missing it gets every Half Block's rotation bumped +180 once, on load, so
+    it keeps looking exactly like it used to."""
+    if data.get("half_block_v2"):
+        return
+    for o in objects:
+        if o.type == config.OBJ_HALF_BLOCK:
+            o.rotation = (o.rotation + 180) % 360
+            o.update_rect()
+
 class Level:
     def __init__(self, filename=None, folder="levels/custom"):
         self.objects = []
@@ -71,6 +86,7 @@ class Level:
                 self.objects = []
                 for o in data.get("objects", []):
                     self.objects.append(GameObject(o['type'], o['x'], o['y'], o.get('rotation', 0), o.get('color_idx', 0), o.get('flip_x', False), o.get('flip_y', False), layer=o.get('layer', 0)))
+                _migrate_half_block_rotation(self.objects, data)
                 self.update_end_x()
         except Exception: pass
 
@@ -107,6 +123,7 @@ class Level:
             self.objects = []
             for o in data.get("objects", []):
                 self.objects.append(GameObject(o['type'], o['x'], o['y'], o.get('rotation', 0), o.get('color_idx', 0), o.get('flip_x', False), o.get('flip_y', False), layer=o.get('layer', 0)))
+            _migrate_half_block_rotation(self.objects, data)
             self.update_end_x()
         except Exception: pass
 
@@ -149,6 +166,7 @@ class Level:
             # per-account store (see Game.get_progress_store_path in main.py).
             "verified": self.verified,
             "noclip": self.noclip,
+            "half_block_v2": True,  # marks Half Block rotations as already using the post-flip mapping -- see _migrate_half_block_rotation
             "objects": [o.to_dict() for o in self.objects]
         }
         

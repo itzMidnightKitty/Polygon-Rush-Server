@@ -52,6 +52,7 @@ class DiscordRPC:
         while True:
             job = self._jobs.get()
             if job is None:
+                self._discard_rpc()
                 return
             kind, payload = job
             try:
@@ -64,16 +65,32 @@ class DiscordRPC:
                     if self._rpc is not None:
                         self._rpc.update(**payload)
                 elif kind == "close":
-                    if self._rpc is not None:
-                        self._rpc.close()
-                    self._connected = False
-                    self._rpc = None
+                    self._discard_rpc()
                     return
             except Exception:
                 # Discord not running / connection dropped / IPC hiccup -- drop
                 # the connection and let a later "connect" job re-establish it.
-                self._connected = False
-                self._rpc = None
+                self._discard_rpc()
+
+    def _discard_rpc(self):
+        # Always explicitly close pypresence's connection here rather than just
+        # dropping the reference and letting the garbage collector find it later.
+        # pypresence opens its Discord IPC pipe via asyncio, and if that object
+        # is instead cleaned up by a random later GC pass (possibly on another
+        # thread, possibly after the loop's already torn down), asyncio's
+        # Windows ProactorEventLoop pipe transport can end up __del__'d in a
+        # half-closed state where even building the warning message crashes
+        # ("Exception ignored in: ProactorBasePipeTransport.__del__ ... I/O
+        # operation on closed pipe") -- harmless, but noisy console spam. Closing
+        # synchronously here, right where we already know the connection is
+        # being torn down, gives it a clean, ordinary shutdown path instead.
+        self._connected = False
+        if self._rpc is not None:
+            try:
+                self._rpc.close()
+            except Exception:
+                pass
+        self._rpc = None
 
     @property
     def _is_connected(self):

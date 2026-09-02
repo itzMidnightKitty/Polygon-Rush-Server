@@ -4,6 +4,15 @@ import pygame
 # Newest first. Add one entry per version bump going forward -- keep it in
 # sync with the version number in main.py's CLIENT_VERSION.
 CHANGELOG = [
+    ("4.1", ["Fixed rotating a multi-selection in the editor only spinning each object in place instead of rotating the whole structure (now rotates as a group, around its own center) -- both the Q/E shortcut and the rotate buttons.",
+             "Every block type (including Solid, Checker, and Brick) can now be rotated, not just the special-shaped ones.",
+             "Half Block's default (unrotated) orientation is now the top half instead of the bottom half; existing levels are unaffected (migrated automatically so they keep rendering exactly as before).",
+             "Fixed the Brick Block's staggered rows silently dropping one of their two joints, which is what was still making it look misaligned after the 3.8 fix.",
+             "Fixed a fast-moving player being able to pass clean through a thin object (outline pieces, pads) in a single frame at boosted speeds without dying/triggering it.",
+             "The level completion sequence now pulls the player in vertically centered on the end wall, and eases in more gently -- the wall no longer spawns on top of the player.",
+             "Laid the groundwork in the editor/engine for a free-rotation control (arbitrary angles, not just 90-degree steps) -- not yet exposed in the editor UI.",
+             "Fixed the Change Password popup having no click sound on submit.",
+             "Fixed an occasional harmless-but-noisy error printing on exit related to Discord Rich Presence's connection cleanup."]),
     ("4.0", ["Redesigned the Dotted Block (embossed bubble look) and Circle Block (now tiles seamlessly -- circles touch their neighbors and combine into small circles at grid intersections, instead of one disconnected dot per cell)."]),
     ("3.9", ["Level completion is now a short scripted sequence (camera/player ease to a stop, get pulled into a glowing end-wall with a particle burst, rotating in) instead of an instant cut. Music keeps playing through the completion menu now too, only stopping when you actually leave.",
              "Added a Change Password option in Settings.",
@@ -239,7 +248,11 @@ CATEGORIES = {
     "Pulse": [OBJ_PULSE_CIRCLE, OBJ_PULSE_HOLLOW, OBJ_PULSE_HEART, OBJ_PULSE_DIAMOND, OBJ_PULSE_STAR, OBJ_PULSE_NOTE]
 }
 
-NON_ROTATABLE = [OBJ_COLOR_TRIGGER, OBJ_GROUND_COLOR_TRIGGER, OBJ_END_TRIGGER, OBJ_BLOCK, OBJ_BLOCK_FADED, OBJ_BLOCK_BRICK, OBJ_ORB_YELLOW, OBJ_ORB_PURPLE, OBJ_ORB_BLUE, OBJ_SPAWN, OBJ_SAW, OBJ_SAW_2, OBJ_SAW_3, OBJ_CLOUD_1, OBJ_CLOUD_2, OBJ_PULSE_CIRCLE, OBJ_PULSE_HOLLOW, OBJ_PULSE_HEART, OBJ_PULSE_DIAMOND, OBJ_PULSE_STAR, OBJ_PULSE_NOTE, OBJ_SPEED_05X, OBJ_SPEED_1X, OBJ_SPEED_2X, OBJ_SPEED_3X, OBJ_SPEED_4X]
+NON_ROTATABLE = [OBJ_COLOR_TRIGGER, OBJ_GROUND_COLOR_TRIGGER, OBJ_END_TRIGGER, OBJ_ORB_YELLOW, OBJ_ORB_PURPLE, OBJ_ORB_BLUE, OBJ_SPAWN, OBJ_SAW, OBJ_SAW_2, OBJ_SAW_3, OBJ_CLOUD_1, OBJ_CLOUD_2, OBJ_PULSE_CIRCLE, OBJ_PULSE_HOLLOW, OBJ_PULSE_HEART, OBJ_PULSE_DIAMOND, OBJ_PULSE_STAR, OBJ_PULSE_NOTE, OBJ_SPEED_05X, OBJ_SPEED_1X, OBJ_SPEED_2X, OBJ_SPEED_3X, OBJ_SPEED_4X]
+# OBJ_BLOCK, OBJ_BLOCK_FADED, OBJ_BLOCK_BRICK used to be here (no meaningful
+# visual difference when rotated for the first two, but blocking rotation
+# entirely was more restrictive than needed -- every Blocks-category type is
+# rotatable now).
 
 # Layering: layer 0 draws last (on top), layer MAX_LAYERS-1 draws first (furthest back)
 MAX_LAYERS = 10

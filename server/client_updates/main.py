@@ -17,7 +17,39 @@ from graphics import draw_world_background, draw_world_ground, draw_difficulty_f
 from game_objects import sort_for_draw
 from discord_rpc import DiscordRPC
 
-CLIENT_VERSION = 4.0
+# Backstop for a known-harmless CPython/asyncio-on-Windows quirk: pypresence's
+# Discord IPC connection (used by discord_rpc.py) can get finalized by the
+# garbage collector in a half-closed state, where asyncio's Windows Proactor
+# pipe transport crashes just trying to *build* its own "unclosed transport"
+# warning message ("Exception ignored in: ProactorBasePipeTransport.__del__
+# ... ValueError: I/O operation on closed pipe"). discord_rpc.py now closes
+# its connection explicitly on every teardown path to avoid this in the first
+# place, but garbage collection timing is never fully guaranteed, so this is a
+# last-resort filter: only swallows that exact known-benign case, and reprints
+# anything else completely unchanged so real bugs are never hidden.
+def _filter_known_benign_unraisable(unraisable):
+    # Deliberately never touches unraisable.object -- it can BE the half-closed
+    # transport, and calling repr()/str() on it is exactly what crashes in the
+    # first place. Traceback frame names are safe to inspect (plain code
+    # objects) and identify this exact case just as reliably.
+    try:
+        benign = False
+        if unraisable.exc_type is ValueError:
+            tb = unraisable.exc_traceback
+            while tb is not None:
+                code = tb.tb_frame.f_code
+                if "proactor_events" in (code.co_filename or "") and code.co_name in ("__del__", "__repr__"):
+                    benign = True
+                    break
+                tb = tb.tb_next
+    except Exception:
+        benign = False
+    if benign:
+        return  # known-benign asyncio Windows pipe teardown noise -- see discord_rpc.py
+    sys.__unraisablehook__(unraisable)
+sys.unraisablehook = _filter_known_benign_unraisable
+
+CLIENT_VERSION = 4.1
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -934,6 +966,11 @@ class Game:
                         elif event.key == pygame.K_BACKSPACE:
                             self.pw_input_text = self.pw_input_text[:-1]
                         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                            # This popup has no on-screen Submit button (Enter is the only
+                            # way to submit), and unlike every other button/action in the
+                            # game it was silent -- no click feedback at all, success or
+                            # failure. Give it the same click sound every other button gets.
+                            self.audio.play_sfx('button.mp3')
                             if len(self.pw_input_text) >= 4:
                                 new_pw = self.pw_input_text
                                 def cb_pw(res, new_pw=new_pw):
@@ -2329,24 +2366,28 @@ class Game:
 
                 if getattr(self, 'win_phase', None) and not is_paused:
                     self.win_timer += 1
-                    DECEL_FRAMES, PULLIN_FRAMES = 24, 18  # ~0.4s + ~0.3s at 60fps
+                    DECEL_FRAMES, PULLIN_FRAMES = 42, 34  # ~0.7s + ~0.57s at 60fps -- was too abrupt at 24/18
                     if self.win_phase == "decel":
                         t = min(1.0, self.win_timer / DECEL_FRAMES)
-                        ease = 1 - (1 - t) ** 2  # ease-out: fast at first, gentles into the stop
+                        ease = 1 - (1 - t) ** 1.6  # gentler ease-out than before, less of a sudden brake
                         self.current_level.speed = self.win_start_speed * (1 - ease)
                         self.player.x += self.current_level.speed
-                        self.player.vel_y *= 0.85  # settle out any vertical bob/fall
+                        self.player.vel_y *= 0.93  # settle out any vertical bob/fall, more gradually
                         if t >= 1.0:
                             self.win_phase = "pullin"
                             self.win_timer = 0
                             self.win_pullin_start_x = self.player.x
                             self.win_pullin_start_y = self.player.y
-                            self._spawn_win_particles(self.win_wall_x, self.player.y + self.player.height / 2)
+                            # Centered vertically in the playable channel, not
+                            # wherever it happened to be flying when it stopped.
+                            self.win_pullin_target_y = (config.CEILING_Y + config.GROUND_Y) / 2 - self.player.height / 2
+                            self._spawn_win_particles(self.win_wall_x, self.win_pullin_target_y + self.player.height / 2)
                     elif self.win_phase == "pullin":
                         t = min(1.0, self.win_timer / PULLIN_FRAMES)
                         ease = t * t * (3 - 2 * t)  # smoothstep: eased in, eased to a stop at the wall
                         self.player.x = self.win_pullin_start_x + (self.win_wall_x - self.win_pullin_start_x) * ease
-                        self.player.rotation += 22
+                        self.player.y = self.win_pullin_start_y + (self.win_pullin_target_y - self.win_pullin_start_y) * ease
+                        self.player.rotation += 10 * (1 - ease) + 4  # spins fast early, gently trails off near the wall
                         if t >= 1.0:
                             self.win_phase = None
                             self.player.won = True
@@ -2488,7 +2529,11 @@ class Game:
                     # completion menu after) rather than the level just cutting
                     # to a popup with nothing shown of where it ended.
                     z = play_zoom * config.get_scale()
-                    wall_x = int((self.current_level.end_x - camera_x) * z)
+                    # win_wall_x (the pull-in target, ahead of end_x), not end_x
+                    # itself -- by the time this sequence starts the player has
+                    # already crossed end_x, so drawing the wall there put it
+                    # behind/on top of the player instead of ahead of them.
+                    wall_x = int((getattr(self, 'win_wall_x', self.current_level.end_x) - camera_x) * z)
                     if -50 < wall_x < config.RENDER_W + 50:
                         wall_color = config.P_COLOR
                         pygame.draw.line(self.screen, wall_color, (wall_x, 0), (wall_x, config.RENDER_H), max(2, S(6)))

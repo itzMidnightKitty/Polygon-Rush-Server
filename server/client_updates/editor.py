@@ -469,17 +469,30 @@ class Editor:
                     max_x = max((o.x for o in self.selected_objs), default=0) + config.GRID_SIZE
                     min_y = min((o.y for o in self.selected_objs), default=0)
                     max_y = max((o.y for o in self.selected_objs), default=0) + config.GRID_SIZE
+                    # Same pivot the ROT_L/ROT_R keyboard shortcut (Q/E) uses for a
+                    # multi-selection -- these buttons used to only spin each
+                    # object's own sprite in place, leaving the group's actual
+                    # layout untouched (a 2-wide row "rotated" into looking
+                    # identical instead of becoming a 2-tall column).
+                    pivot_x, pivot_y = (min_x + max_x) / 2, (min_y + max_y) / 2
+                    gs = config.GRID_SIZE
                     for obj in self.selected_objs:
                         if name == "UP": obj.y -= step; obj.base_y = obj.y
                         elif name == "DOWN": obj.y += step; obj.base_y = obj.y
                         elif name == "LEFT": obj.x -= step; obj.base_x = obj.x
                         elif name == "RIGHT": obj.x += step; obj.base_x = obj.x
-                        elif name == "ROT_L" and obj.type not in config.NON_ROTATABLE: obj.rotation = (obj.rotation - 90) % 360
-                        elif name == "ROT_R" and obj.type not in config.NON_ROTATABLE: obj.rotation = (obj.rotation + 90) % 360
-                        elif name == "FLIP_X" and obj.type not in config.NON_ROTATABLE: 
+                        elif name in ("ROT_L", "ROT_R"):
+                            direction = -1 if name == "ROT_L" else 1
+                            if obj.type not in config.NON_ROTATABLE:
+                                obj.rotation = (obj.rotation + 90 * direction) % 360
+                            dx, dy = (obj.x + gs / 2) - pivot_x, (obj.y + gs / 2) - pivot_y
+                            ndx, ndy = (-dy, dx) if direction == 1 else (dy, -dx)
+                            obj.x = round((pivot_x + ndx - gs / 2) / gs) * gs; obj.base_x = obj.x
+                            obj.y = round((pivot_y + ndy - gs / 2) / gs) * gs; obj.base_y = obj.y
+                        elif name == "FLIP_X" and obj.type not in config.NON_ROTATABLE:
                             obj.flip_x = not obj.flip_x
                             obj.x = min_x + max_x - config.GRID_SIZE - obj.x; obj.base_x = obj.x
-                        elif name == "FLIP_Y" and obj.type not in config.NON_ROTATABLE: 
+                        elif name == "FLIP_Y" and obj.type not in config.NON_ROTATABLE:
                             obj.flip_y = not obj.flip_y
                             obj.y = min_y + max_y - config.GRID_SIZE - obj.y; obj.base_y = obj.y
                         obj.update_rect()
@@ -725,13 +738,29 @@ class Editor:
                             o.x = min_x + max_x - config.GRID_SIZE - o.x
                             o.update_rect()
                 elif event.key in (pygame.K_q, pygame.K_e):
+                    # Rotates the whole selection as one rigid structure around its
+                    # own center -- each object's own sprite spins (when rotatable)
+                    # AND its position swings around the shared pivot, instead of
+                    # every object just spinning in place where it already was
+                    # (which left a 2-wide row looking identical after a 90
+                    # rotation instead of becoming a 2-tall column).
                     self.save_state()
                     self.unsaved_changes = True
+                    gs = config.GRID_SIZE
+                    min_x = min((o.x for o in self.selected_objs), default=0)
+                    max_x = max((o.x for o in self.selected_objs), default=0) + gs
+                    min_y = min((o.y for o in self.selected_objs), default=0)
+                    max_y = max((o.y for o in self.selected_objs), default=0) + gs
+                    pivot_x, pivot_y = (min_x + max_x) / 2, (min_y + max_y) / 2
+                    direction = -1 if event.key == pygame.K_q else 1
                     for o in self.selected_objs:
                         if o.type not in config.NON_ROTATABLE:
-                            if event.key == pygame.K_q: o.rotation = (o.rotation - 90) % 360
-                            else: o.rotation = (o.rotation + 90) % 360
-                            o.update_rect()
+                            o.rotation = (o.rotation + 90 * direction) % 360
+                        dx, dy = (o.x + gs / 2) - pivot_x, (o.y + gs / 2) - pivot_y
+                        ndx, ndy = (-dy, dx) if direction == 1 else (dy, -dx)
+                        o.x = round((pivot_x + ndx - gs / 2) / gs) * gs
+                        o.y = round((pivot_y + ndy - gs / 2) / gs) * gs
+                        o.update_rect()
                 elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
                     self.save_state()
                     self.unsaved_changes = True

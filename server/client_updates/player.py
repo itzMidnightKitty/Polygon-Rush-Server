@@ -1,6 +1,18 @@
 import pygame
 import math
 import config
+from game_objects import rect_intersects_poly
+
+
+def _touches(rect, obj):
+    """True if `rect` actually overlaps this object's real collision shape --
+    the fast axis-aligned obj.rect for a cardinal-angle object (byte-identical
+    to before for every existing level, which only ever uses 0/90/180/270),
+    or the precise rotated polygon (SAT) for a genuinely free-angle one from
+    the editor's rotation dial."""
+    if obj.rotation % 90 == 0:
+        return rect.colliderect(obj.rect)
+    return rect_intersects_poly(rect, obj.get_rotated_hitbox())
 
 # Kept as a no-op target: main.py calls player._icon_cache.clear() when the
 # player changes their icon/color selection in the profile screen.
@@ -194,7 +206,8 @@ class Player:
                             if ceiling_case:
                                 if noclip:
                                     pass  # clip straight through in noclip
-                                elif core_rect.right > obj.rect.left and core_rect.left < obj.rect.right and core_rect.bottom > obj.rect.top:
+                                elif (core_rect.right > obj.rect.left and core_rect.left < obj.rect.right and core_rect.bottom > obj.rect.top) \
+                                        or (obj.rotation % 90 != 0 and rect_intersects_poly(core_rect, obj.get_rotated_hitbox())):
                                     self.die(noclip)
                                 # else: outer hitbox grazes the ceiling but the core clears it -- survive, no clamp
                             else:
@@ -206,7 +219,8 @@ class Player:
                             if ceiling_case:
                                 if noclip:
                                     pass
-                                elif core_rect.right > obj.rect.left and core_rect.left < obj.rect.right and core_rect.top < obj.rect.bottom:
+                                elif (core_rect.right > obj.rect.left and core_rect.left < obj.rect.right and core_rect.top < obj.rect.bottom) \
+                                        or (obj.rotation % 90 != 0 and rect_intersects_poly(core_rect, obj.get_rotated_hitbox())):
                                     self.die(noclip)
                             else:
                                 self.rect.top = obj.rect.bottom; self.y = self.rect.y; self.vel_y = 0
@@ -237,8 +251,37 @@ class Player:
                 target_rot = 45 if self.vel_y < 0 else -45
             self.rotation += (target_rot - self.rotation) * 0.4
 
+        # Captured before the horizontal move so we can sweep the path this frame's
+        # movement covers, not just test the final resting position (see tunneling
+        # guard below). core_rect above was computed against this same pre-move x.
+        prev_rect = self.rect.copy()
+        core_rect_prev = core_rect
+
         self.x += scroll_speed
         self.rect.x = int(self.x)
+
+        # Tunneling guard: unlike vertical movement (which has a velocity-tolerant swept
+        # check above), horizontal movement only ever tested the end-of-frame rect against
+        # objects. At boosted scroll speeds (speed portals) a single frame's horizontal
+        # travel can exceed a thin object's collision width -- e.g. the outline pieces'
+        # 10px strip -- letting the player's final rect land past it without the two rects
+        # ever overlapping: a clean pass-through with no death registered ("the ball
+        # clipped into an outline block"). This unions the pre-move and post-move rects
+        # into one swept rect covering the whole path, and only acts on objects the normal
+        # end-of-frame check below would otherwise miss entirely, so it can't change
+        # anything about a normal (non-tunneling) frame's behavior.
+        swept_rect = prev_rect.union(self.rect)
+        core_rect_new = self.rect.inflate(-int(self.width * 0.4), -int(self.height * 0.4))
+        swept_core_rect = core_rect_prev.union(core_rect_new)
+        for obj in objects:
+            if self.rect.colliderect(obj.rect):
+                continue  # handled normally below
+            if obj.is_deadly() and swept_rect.colliderect(obj.rect):
+                self.die(noclip)
+            elif obj.is_solid() and self.mode == "wave" and swept_rect.colliderect(obj.rect):
+                self.die(noclip)
+            elif obj.is_solid() and self.mode != "wave" and swept_core_rect.colliderect(obj.rect):
+                self.die(noclip)
 
         overlapping_orb = False
         if not hasattr(self, 'active_pads'): self.active_pads = set()
@@ -344,12 +387,12 @@ class Player:
                         (self.gravity_dir == -1 and obj.rect.top >= self.rect.centery - 6)
                     )
                     if overhead:
-                        if core_rect.colliderect(obj.rect):
+                        if _touches(core_rect, obj):
                             self.die(noclip)
-                    else:
+                    elif _touches(self.rect, obj):
                         self.die(noclip)
 
-                if obj.is_solid() and self.mode != "wave" and core_rect.colliderect(obj.rect):
+                if obj.is_solid() and self.mode != "wave" and _touches(core_rect, obj):
                     self.die(noclip)
 
         self.active_pads = current_pads

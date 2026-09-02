@@ -2,6 +2,31 @@ import pygame
 import math
 import config
 
+
+def rect_intersects_poly(rect, poly):
+    """SAT overlap test: an axis-aligned pygame.Rect vs an arbitrary convex
+    polygon (used for a freely-rotated object's true hitbox from
+    get_rotated_hitbox()). Two convex shapes are separated iff some axis
+    perpendicular to one of either shape's edges separates their projections
+    -- checking every edge normal from both shapes is sufficient and exact
+    for two convex polygons (a rect is just a 4-gon here)."""
+    rect_pts = [(rect.left, rect.top), (rect.right, rect.top), (rect.right, rect.bottom), (rect.left, rect.bottom)]
+    for pts in (rect_pts, poly):
+        n = len(pts)
+        for i in range(n):
+            x1, y1 = pts[i]
+            x2, y2 = pts[(i + 1) % n]
+            ax, ay = -(y2 - y1), (x2 - x1)
+            length = math.hypot(ax, ay)
+            if length == 0:
+                continue
+            ax, ay = ax / length, ay / length
+            proj_r = [px * ax + py * ay for px, py in rect_pts]
+            proj_p = [px * ax + py * ay for px, py in poly]
+            if max(proj_r) < min(proj_p) or max(proj_p) < min(proj_r):
+                return False
+    return True
+
 try:
     from PIL import Image, ImageDraw, ImageFilter
     _PIL_AVAILABLE = True
@@ -143,40 +168,56 @@ class GameObject:
     def update_rect(self):
         w, h = config.GRID_SIZE, config.GRID_SIZE
         ox, oy = self.x, self.y
+        # Free rotation (the dial in the editor) lets self.rotation be any float
+        # degree now, but the shapes below are hand-built rects for exactly the 4
+        # cardinal cases -- an in-between value would silently fall through with
+        # no matching branch (oversized/wrong hitbox). Collision always snaps to
+        # the nearest cardinal via qrot; the VISUAL sprite in get_surface() below
+        # still rotates to the exact free angle, so what you see can lean at an
+        # angle while what you collide with stays a sane axis-aligned box.
+        qrot = round(self.rotation / 90) * 90 % 360
 
         if self.type == config.OBJ_HALF_BLOCK:
+            # Default (rotation 0) used to be the bottom half; flipped to the
+            # top half by shifting which raw rotation value maps to which
+            # geometry by 180 (matches the same shift applied to the visual
+            # rotation in get_surface() below, so collision and sprite stay
+            # consistent) -- old levels get their stored rotation migrated
+            # by +180 on load (see Level.load()/load_from_json()) so they
+            # keep rendering exactly as they did before this change.
             w, h = config.GRID_SIZE, config.GRID_SIZE // 2
-            if self.rotation == 90: ox, oy, w, h = self.x + config.GRID_SIZE//2, self.y, config.GRID_SIZE//2, config.GRID_SIZE
-            elif self.rotation == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
-            elif self.rotation == 270: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
+            r = (qrot + 180) % 360
+            if r == 90: ox, oy, w, h = self.x + config.GRID_SIZE//2, self.y, config.GRID_SIZE//2, config.GRID_SIZE
+            elif r == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
+            elif r == 270: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
             else: oy = self.y + config.GRID_SIZE // 2
         elif self.type == config.OBJ_OUTLINE_LINE:
             t = 10
-            if self.rotation == 90: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y, t, config.GRID_SIZE
-            elif self.rotation == 180: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - t, config.GRID_SIZE, t
-            elif self.rotation == 270: ox, oy, w, h = self.x, self.y, t, config.GRID_SIZE
+            if qrot == 90: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y, t, config.GRID_SIZE
+            elif qrot == 180: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - t, config.GRID_SIZE, t
+            elif qrot == 270: ox, oy, w, h = self.x, self.y, t, config.GRID_SIZE
             else: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, t
         elif self.type == config.OBJ_OUTLINE_CORNER_PIXEL:
             t = 10
-            if self.rotation == 90: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y, t, t
-            elif self.rotation == 180: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y + config.GRID_SIZE - t, t, t
-            elif self.rotation == 270: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - t, t, t
+            if qrot == 90: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y, t, t
+            elif qrot == 180: ox, oy, w, h = self.x + config.GRID_SIZE - t, self.y + config.GRID_SIZE - t, t, t
+            elif qrot == 270: ox, oy, w, h = self.x, self.y + config.GRID_SIZE - t, t, t
             else: ox, oy, w, h = self.x, self.y, t, t
         elif self.type == config.OBJ_SPIKE:
-            if self.rotation == 0: ox, oy, w, h = self.x + 6, self.y + 10, config.GRID_SIZE - 12, config.GRID_SIZE - 10
-            elif self.rotation == 90: ox, oy, w, h = self.x, self.y + 6, config.GRID_SIZE - 10, config.GRID_SIZE - 12
-            elif self.rotation == 180: ox, oy, w, h = self.x + 6, self.y, config.GRID_SIZE - 12, config.GRID_SIZE - 10
-            elif self.rotation == 270: ox, oy, w, h = self.x + 10, self.y + 6, config.GRID_SIZE - 10, config.GRID_SIZE - 12
+            if qrot == 0: ox, oy, w, h = self.x + 6, self.y + 10, config.GRID_SIZE - 12, config.GRID_SIZE - 10
+            elif qrot == 90: ox, oy, w, h = self.x, self.y + 6, config.GRID_SIZE - 10, config.GRID_SIZE - 12
+            elif qrot == 180: ox, oy, w, h = self.x + 6, self.y, config.GRID_SIZE - 12, config.GRID_SIZE - 10
+            elif qrot == 270: ox, oy, w, h = self.x + 10, self.y + 6, config.GRID_SIZE - 10, config.GRID_SIZE - 12
         elif self.type == config.OBJ_HALF_SPIKE:
-            if self.rotation == 0: ox, oy, w, h = self.x + 6, self.y + config.GRID_SIZE//2 + 4, config.GRID_SIZE - 12, config.GRID_SIZE//2 - 4
-            elif self.rotation == 90: ox, oy, w, h = self.x, self.y + 6, config.GRID_SIZE//2 - 4, config.GRID_SIZE - 12
-            elif self.rotation == 180: ox, oy, w, h = self.x + 6, self.y, config.GRID_SIZE - 12, config.GRID_SIZE//2 - 4
-            elif self.rotation == 270: ox, oy, w, h = self.x + config.GRID_SIZE//2 + 4, self.y + 6, config.GRID_SIZE//2 - 4, config.GRID_SIZE - 12
+            if qrot == 0: ox, oy, w, h = self.x + 6, self.y + config.GRID_SIZE//2 + 4, config.GRID_SIZE - 12, config.GRID_SIZE//2 - 4
+            elif qrot == 90: ox, oy, w, h = self.x, self.y + 6, config.GRID_SIZE//2 - 4, config.GRID_SIZE - 12
+            elif qrot == 180: ox, oy, w, h = self.x + 6, self.y, config.GRID_SIZE - 12, config.GRID_SIZE//2 - 4
+            elif qrot == 270: ox, oy, w, h = self.x + config.GRID_SIZE//2 + 4, self.y + 6, config.GRID_SIZE//2 - 4, config.GRID_SIZE - 12
         elif self.type == config.OBJ_GROUND_SPIKE:
-            if self.rotation == 0: ox, oy, w, h = self.x, self.y + config.GRID_SIZE//2, config.GRID_SIZE, config.GRID_SIZE//2
-            elif self.rotation == 90: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
-            elif self.rotation == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
-            elif self.rotation == 270: ox, oy, w, h = self.x + config.GRID_SIZE//2, self.y, config.GRID_SIZE//2, config.GRID_SIZE
+            if qrot == 0: ox, oy, w, h = self.x, self.y + config.GRID_SIZE//2, config.GRID_SIZE, config.GRID_SIZE//2
+            elif qrot == 90: ox, oy, w, h = self.x, self.y, config.GRID_SIZE//2, config.GRID_SIZE
+            elif qrot == 180: ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE//2
+            elif qrot == 270: ox, oy, w, h = self.x + config.GRID_SIZE//2, self.y, config.GRID_SIZE//2, config.GRID_SIZE
         elif self.type in (config.OBJ_PORTAL_CUBE, config.OBJ_PORTAL_SHIP, config.OBJ_PORTAL_BALL, config.OBJ_PORTAL_UFO, config.OBJ_PORTAL_WAVE, config.OBJ_PORTAL_GRAV_DOWN, config.OBJ_PORTAL_GRAV_UP):
             if self.rotation in (90, 270):
                 ox, oy, w, h = self.x - config.GRID_SIZE, self.y, config.GRID_SIZE * 3, config.GRID_SIZE
@@ -227,6 +268,37 @@ class GameObject:
             ox, oy, w, h = self.x, self.y, config.GRID_SIZE, config.GRID_SIZE*2
 
         self.rect = pygame.Rect(ox, oy, w, h)
+
+    def get_rotated_hitbox(self):
+        """4 (x,y) corners of this object's TRUE collision shape, rotated by the
+        exact free self.rotation (not snapped to a cardinal) around the cell
+        center -- the precise hitbox for the free-rotation dial, matching
+        whatever angle the sprite is actually drawn at. self.rect (from
+        update_rect(), snapped to the nearest cardinal via qrot) stays the fast
+        axis-aligned approximation used for broad-phase/landing; this is the
+        narrow-phase shape used to confirm an actual hit. Reuses update_rect()'s
+        own cardinal-0 shape as the seed (by asking for it directly) rather than
+        re-deriving each type's geometry a second time by hand, so it can never
+        drift out of sync with the hand-tuned shapes above.
+        """
+        saved = self.rotation
+        self.rotation = 0
+        self.update_rect()
+        r = self.rect.copy()
+        self.rotation = saved
+        self.update_rect()
+        cell_cx, cell_cy = self.x + config.GRID_SIZE / 2, self.y + config.GRID_SIZE / 2
+        local_cx, local_cy = r.centerx - cell_cx, r.centery - cell_cy
+        hw, hh = r.width / 2, r.height / 2
+        # Same sign convention as get_surface()'s pygame.transform.rotate(obj_surf,
+        # -self.rotation) call below, so the hitbox always matches what's drawn.
+        center_v = pygame.math.Vector2(local_cx, local_cy).rotate(-self.rotation)
+        ccx, ccy = cell_cx + center_v.x, cell_cy + center_v.y
+        corners = []
+        for sx, sy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)):
+            cv = pygame.math.Vector2(sx, sy).rotate(-self.rotation)
+            corners.append((ccx + cv.x, ccy + cv.y))
+        return corners
 
     def get_surface(self, zoom=1.0, highlight=False, size_override=None):
         # A given object's rendered pixels are fully determined by its visual
@@ -322,9 +394,18 @@ class GameObject:
             # OBJ_BLOCK_FADED's checker parity just above.
             row0 = round(self.y / config.GRID_SIZE) * 4
             for r in range(4):
+                # Half-brick offset (gz//4) on odd sub-rows gives a proper running
+                # bond: two joints (a half-brick cut at each edge, one full brick
+                # between). This used to also subtract a full brick_w from the
+                # first joint "to wrap it into view", but that just pushed it to
+                # a negative x and dropped it entirely -- every offset row was
+                # silently rendering with only ONE joint instead of two, which is
+                # what actually made the brick pattern look broken/misaligned
+                # whenever an offset row appeared (every other sub-row, so on
+                # every stacked cell).
                 offset = (gz // 4) if (row0 + r) % 2 == 1 else 0
                 for c in range(3):
-                    x = offset + c * brick_w - (brick_w if c==0 and offset>0 else 0)
+                    x = offset + c * brick_w
                     if 0 < x < gz:
                         pygame.draw.line(obj_surf, dark_brick, (x, r*brick_h), (x, r*brick_h + brick_h), lw)
         elif self.type == config.OBJ_BLOCK_GRID:
@@ -589,8 +670,14 @@ class GameObject:
         if self.flip_x or self.flip_y:
             obj_surf = pygame.transform.flip(obj_surf, self.flip_x, self.flip_y)
 
-        if self.rotation != 0 and self.type not in config.NON_ROTATABLE:
-            obj_surf = pygame.transform.rotate(obj_surf, -self.rotation)
+        # See update_rect()'s OBJ_HALF_BLOCK branch: its default (rotation 0)
+        # was flipped from bottom-half to top-half by shifting the rotation
+        # mapping 180 -- applied here too so the sprite always matches the
+        # hitbox. Needed even at rotation 0 now, since that itself needs an
+        # actual 180 turn to show the (new) default half.
+        visual_rot = (self.rotation + 180) % 360 if self.type == config.OBJ_HALF_BLOCK else self.rotation
+        if visual_rot != 0 and self.type not in config.NON_ROTATABLE:
+            obj_surf = pygame.transform.rotate(obj_surf, -visual_rot)
 
         if len(_SURFACE_CACHE) < _SURFACE_CACHE_LIMIT:
             _SURFACE_CACHE[cache_key] = obj_surf
@@ -641,6 +728,20 @@ class GameObject:
                 rotated_surf.set_alpha(alpha)
             rect = rotated_surf.get_rect(center=orig_center)
             surface.blit(rotated_surf, rect.topleft)
+            return
+
+        rem = self.rotation % 90
+        if rem > 0.01 and rem < 89.99 and self.type not in config.NON_ROTATABLE:
+            # A genuinely free (non-cardinal) rotation angle: get_surface() already
+            # rotated obj_surf, and pygame.transform.rotate returns a surface sized
+            # to fit the rotated content -- bigger than the original square/rect.
+            # Blitting that at the same top-left used for an unrotated/cardinal
+            # object would visibly shift it off its grid cell, so center it on the
+            # cell's own center instead (the one thing that doesn't move as the
+            # object spins in place).
+            pre_w, pre_h = size_override if size_override is not None else (int(config.GRID_SIZE * zoom * config.get_scale()),) * 2
+            rect = obj_surf.get_rect(center=(draw_x + pre_w // 2, draw_y + pre_h // 2))
+            surface.blit(obj_surf, rect.topleft)
             return
 
         surface.blit(obj_surf, (draw_x, draw_y))
