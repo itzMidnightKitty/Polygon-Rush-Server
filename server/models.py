@@ -12,11 +12,13 @@ class User(Base):
     points = Column(Integer, default=0) # Unused? We'll keep it or ignore it
     is_admin = Column(Boolean, default=False)
     is_moderator = Column(Boolean, default=False)
+    is_playtester = Column(Boolean, default=False)  # purely cosmetic, admin-granted -- no extra permissions
     
     # Progression
     official_stars = Column(Integer, default=0)
     user_stars = Column(Integer, default=0)
     creator_points = Column(Integer, default=0)
+    playtime_seconds = Column(Integer, default=0)
     
     # Icons
     icon_cube = Column(Integer, default=0)

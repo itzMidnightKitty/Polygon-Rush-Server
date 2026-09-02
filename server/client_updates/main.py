@@ -4,6 +4,7 @@ import sys
 import os
 import json
 import base64
+import hashlib
 import config
 from config import S
 from network import NetworkManager
@@ -14,8 +15,9 @@ from level_manager import Level
 from editor import Editor
 from graphics import draw_world_background, draw_world_ground, draw_difficulty_face
 from game_objects import sort_for_draw
+from discord_rpc import DiscordRPC
 
-CLIENT_VERSION = 2.4
+CLIENT_VERSION = 3.2
 
 def init_folders():
     for folder in ["levels/official", "levels/custom", "audio/music", "audio/sfx"]: 
@@ -30,6 +32,11 @@ class Game:
         self.audio = AudioManager()
         
         self.state = "MENU"
+        self.discord = DiscordRPC()
+        self.discord.connect()
+        self._discord_last_state = None
+        self._discord_reconnect_timer = 0.0
+        self.playtime_accum = 0.0
         self.play_fade = 255
         self.is_practice_mode = False
         self.checkpoints = []
@@ -170,9 +177,106 @@ class Game:
         else:
             if not self.current_level.music and self.audio.available_tracks: self.current_level.music = self.audio.available_tracks[0]
             if self.current_level.music: 
-                offset = max(0.0, (spawn_x - 200) / (self.current_level.speed * config.FPS))
+                offset = max(0.0, (spawn_x - 200) / (self.current_level.speed * config.FPS) + getattr(self.current_level, 'song_offset', 0.0))
                 self.audio.play_music(self.current_level.music, offset=offset)
         self.player.jump_held = pygame.key.get_pressed()[pygame.K_SPACE] or pygame.mouse.get_pressed()[0] or pygame.key.get_pressed()[pygame.K_UP]
+
+    def check_for_updates(self, silent=False):
+        """Checks the server version and downloads+applies an update if one
+        exists (same relaunch-via-updater.py mechanism either way). silent
+        suppresses the 'up to date'/error messages for the automatic
+        launch-time check -- an actual update in progress still shows its
+        download status either way, so a sudden relaunch isn't a surprise."""
+        def cb_check(res):
+            if res.get("success"):
+                v = res.get("data", {}).get("version", 0)
+                if v > CLIENT_VERSION:
+                    self.update_msg = "Update available! Downloading..."
+                    update_files = ["main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py", "newgrounds.py", "ui_elements.py", "graphics.py", "audio_manager.py", "discord_rpc.py"]
+
+                    def download_next(idx):
+                        if idx >= len(update_files):
+                            updater_script = (
+                                "import os, time, sys, subprocess\n"
+                                "time.sleep(1)\n"
+                                "try:\n"
+                                f"    for name in {update_files!r}:\n"
+                                "        new_name = name[:-3] + '_new.py'\n"
+                                "        if os.path.exists(new_name):\n"
+                                "            os.replace(new_name, name)\n"
+                                "    subprocess.Popen([sys.executable, 'main.py'])\n"
+                                "except Exception: pass\n"
+                            )
+                            with open("updater.py", "w", encoding="utf-8") as f:
+                                f.write(updater_script)
+                            import subprocess
+                            subprocess.Popen([sys.executable, "updater.py"])
+                            import os; os._exit(0)
+                            return
+                        fname = update_files[idx]
+                        def cb_dl(dl_res):
+                            if dl_res.get("success"):
+                                new_name = fname[:-3] + "_new.py"
+                                with open(new_name, "w", encoding="utf-8") as f:
+                                    f.write(dl_res.get("text", ""))
+                                self.update_msg = f"Update available! Downloading... ({idx+1}/{len(update_files)})"
+                                download_next(idx + 1)
+                            else:
+                                self.update_msg = f"Failed to download {fname}: {dl_res.get('error')}"
+                        self.network.download_update(cb_dl, filename=fname)
+                    download_next(0)
+                elif not silent:
+                    self.update_msg = "Game is up to date!"
+            elif not silent:
+                self.update_msg = f"Error: {res.get('error')}"
+        self.network.check_update(cb_check)
+        self.sync_official_levels(silent=silent)
+
+    def sync_official_levels(self, silent=True):
+        """Pulls any official levels the admin has pushed to the server that
+        this client doesn't have yet (or has an outdated copy of), by
+        comparing content hashes against the server's manifest. Runs
+        silently on launch and again whenever Check for Update is pressed --
+        official levels can be pushed independently of a code version bump."""
+        def cb_manifest(res):
+            if not res.get("success"):
+                if not silent: self.update_msg = f"Couldn't reach server for official levels: {res.get('error')}"
+                return
+            manifest = res.get("data", [])
+            official_dir = "levels/official"
+            os.makedirs(official_dir, exist_ok=True)
+            local_hashes = {}
+            for fname in os.listdir(official_dir):
+                if not fname.endswith(".json"): continue
+                try:
+                    with open(os.path.join(official_dir, fname), "rb") as f:
+                        local_hashes[fname] = hashlib.sha256(f.read()).hexdigest()[:16]
+                except Exception:
+                    pass
+            to_fetch = [entry["filename"] for entry in manifest if local_hashes.get(entry.get("filename")) != entry.get("hash")]
+
+            def fetch_next(idx):
+                if idx >= len(to_fetch):
+                    if not silent:
+                        self.update_msg = f"Official levels up to date ({len(manifest)} total)."
+                    return
+                fname = to_fetch[idx]
+                def cb_dl(dl_res):
+                    if dl_res.get("success"):
+                        try:
+                            with open(os.path.join(official_dir, fname), "w", encoding="utf-8") as f:
+                                f.write(dl_res.get("text", ""))
+                        except Exception:
+                            pass
+                    fetch_next(idx + 1)
+                self.network.download_official_level(fname, cb_dl)
+
+            if to_fetch:
+                if not silent: self.update_msg = f"Syncing {len(to_fetch)} official level(s)..."
+                fetch_next(0)
+            elif not silent:
+                self.update_msg = "Official levels up to date!"
+        self.network.get_official_levels_manifest(cb_manifest)
 
     def get_active_bg_color(self, target_x):
         active_color = config.BG_COLORS[self.current_level.start_bg_idx] if self.current_level else config.BG_COLORS[0]
@@ -219,10 +323,10 @@ class Game:
         config.P_COLOR, config.P_CUBE_IDX, config.P_SHIP_IDX, config.P_BALL_IDX, config.P_WAVE_IDX = old_color, old_c_idx, old_s_idx, old_b_idx, old_w_idx
 
     def draw_admin_stat_buttons(self):
-        cp_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(400), S(80), S(30))
-        cp_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(400), S(80), S(30))
-        star_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(440), S(80), S(30))
-        star_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(440), S(80), S(30))
+        cp_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(490), S(80), S(30))
+        cp_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(490), S(80), S(30))
+        star_plus_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(530), S(80), S(30))
+        star_minus_btn = pygame.Rect(S(config.BASE_W//2 + 220), S(530), S(80), S(30))
 
         pygame.draw.rect(self.screen, config.GREEN, cp_plus_btn, 0, S(5))
         pygame.draw.rect(self.screen, config.RED, cp_minus_btn, 0, S(5))
@@ -340,6 +444,18 @@ class Game:
             elif not r.get("success"):
                 self.profile_msg = "Failed to update moderator status."
         self.network.admin_set_user_mod(username, new_state, cb)
+
+    def admin_toggle_playtester(self):
+        if not getattr(self, 'profile_data', None):
+            return
+        username = self.profile_data.get('username')
+        new_state = not self.profile_data.get('is_playtester', False)
+        def cb(r):
+            if r.get("success") and getattr(self, 'profile_data', None) and self.profile_data.get('username') == username:
+                self.profile_data = r.get("data")
+            elif not r.get("success"):
+                self.profile_msg = "Failed to update playtester status."
+        self.network.admin_set_user_playtester(username, new_state, cb)
     
     def handle_rate_popup_click(self, logical_mouse):
         popup_rect = pygame.Rect(config.BASE_W//2 - 300, config.BASE_H//2 - 150, 600, 300)
@@ -583,13 +699,56 @@ class Game:
                 self.screen.blit(ut, (save_btn.centerx - ut.get_width()//2, save_btn.centery - ut.get_height()//2))
 
 
+    def _update_discord_presence(self, dt):
+        # Retry connecting periodically -- covers the common case of Discord
+        # starting up after the game already has (or Discord being restarted).
+        if not self.discord._connected:
+            self._discord_reconnect_timer -= dt
+            if self._discord_reconnect_timer <= 0:
+                self._discord_reconnect_timer = 20.0
+                self.discord.connect()
+            return
+
+        state = self.state
+        rpc_state = None
+        if state == "PLAY":
+            level_name = getattr(self.current_level, 'name', None) or "a level"
+            details = f"Playing {level_name}"
+            rpc_state = "Practice Mode" if getattr(self, 'is_practice_mode', False) else "Normal Mode"
+        elif state == "EDITOR":
+            level_name = getattr(getattr(self, 'editor', None), 'level', None)
+            level_name = getattr(level_name, 'name', None) or "a level"
+            details = f"Building {level_name}"
+        elif state in ("MAIN_LEVELS", "LEVEL_INFO"):
+            details = "Browsing Levels"
+        elif state == "ONLINE_HUB":
+            details = "Browsing Online Levels"
+        elif state == "PROFILE":
+            details = "Viewing a Profile"
+        elif state in ("SETTINGS", "KEYBINDS"):
+            details = "In Settings"
+        elif state == "LOGIN":
+            details = "Logging In"
+        else:
+            details = "In the Menu"
+
+        # A fresh "elapsed" clock whenever a level attempt or editing session
+        # actually starts, instead of showing time-since-game-launched everywhere.
+        if state != self._discord_last_state and state in ("PLAY", "EDITOR"):
+            self.discord.reset_timer()
+        self._discord_last_state = state
+
+        self.discord.update(details=details, state=rpc_state)
+
     def run(self):
+        self.check_for_updates(silent=True)
         running = True
         while running:
             # Fix my_profile_data crash
             if not isinstance(getattr(self, 'my_profile_data', {}), dict):
                 self.my_profile_data = {}
             self.network.update()
+            self._update_discord_presence(1.0 / config.FPS)
             keys = pygame.key.get_pressed()
             raw_mouse_pos = pygame.mouse.get_pos()
             logical_mouse = (raw_mouse_pos[0] / config.get_scale(), raw_mouse_pos[1] / config.get_scale())
@@ -729,49 +888,7 @@ class Game:
                             self.state = "SETTINGS"; self.audio.play_sfx('button.mp3')
                         elif b_update.collidepoint(logical_mouse):
                             self.audio.play_sfx('button.mp3')
-                            def cb_check(res):
-                                if res.get("success"):
-                                    v = res.get("data", {}).get("version", 0)
-                                    if v > CLIENT_VERSION:
-                                        self.update_msg = "Update available! Downloading..."
-                                        update_files = ["main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py", "newgrounds.py"]
-
-                                        def download_next(idx):
-                                            if idx >= len(update_files):
-                                                updater_script = (
-                                                    "import os, time, sys, subprocess\n"
-                                                    "time.sleep(1)\n"
-                                                    "try:\n"
-                                                    f"    for name in {update_files!r}:\n"
-                                                    "        new_name = name[:-3] + '_new.py'\n"
-                                                    "        if os.path.exists(new_name):\n"
-                                                    "            os.replace(new_name, name)\n"
-                                                    "    subprocess.Popen([sys.executable, 'main.py'])\n"
-                                                    "except Exception: pass\n"
-                                                )
-                                                with open("updater.py", "w", encoding="utf-8") as f:
-                                                    f.write(updater_script)
-                                                import subprocess
-                                                subprocess.Popen([sys.executable, "updater.py"])
-                                                import os; os._exit(0)
-                                                return
-                                            fname = update_files[idx]
-                                            def cb_dl(dl_res):
-                                                if dl_res.get("success"):
-                                                    new_name = fname[:-3] + "_new.py"
-                                                    with open(new_name, "w", encoding="utf-8") as f:
-                                                        f.write(dl_res.get("text", ""))
-                                                    self.update_msg = f"Update available! Downloading... ({idx+1}/{len(update_files)})"
-                                                    download_next(idx + 1)
-                                                else:
-                                                    self.update_msg = f"Failed to download {fname}: {dl_res.get('error')}"
-                                            self.network.download_update(cb_dl, filename=fname)
-                                        download_next(0)
-                                    else:
-                                        self.update_msg = "Game is up to date!"
-                                else:
-                                    self.update_msg = f"Error: {res.get('error')}"
-                            self.network.check_update(cb_check)
+                            self.check_for_updates(silent=False)
                         elif b_exit.collidepoint(logical_mouse):
                             self.active_popup = "exit_confirm"; self.audio.play_sfx('button.mp3')
 
@@ -1151,6 +1268,25 @@ class Game:
                             def cb_del(res):
                                 if res.get("success"): self.state = "ONLINE_HUB"; self.load_online_hub()
                             self.network.delete_level(lvl.get('level_id'), cb_del)
+
+                        publish_btn = pygame.Rect(config.BASE_W//2 - 100, 590, 200, 40)
+                        if getattr(self, 'my_profile_data', {}).get('is_admin') and publish_btn.collidepoint(logical_mouse):
+                            if getattr(self, "online_status_msg", "").startswith("Publishing"): continue
+                            self.online_status_msg = f"Publishing {lvl.get('title')} as official..."
+                            def cb_fetch_for_publish(res):
+                                if not res.get("success"):
+                                    self.online_status_msg = f"Error: {res.get('error', 'Unknown Error')}"
+                                    return
+                                data = res.get("data", {})
+                                import re
+                                safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', lvl.get('title', 'level')).lower()
+                                def cb_publish(pub_res):
+                                    if pub_res.get("success"):
+                                        self.online_status_msg = f"Published as {pub_res.get('data', {}).get('filename', safe_name)}!"
+                                    else:
+                                        self.online_status_msg = f"Publish failed: {pub_res.get('error', 'Unknown Error')}"
+                                self.network.upload_official_level(safe_name, data.get("data", "{}"), cb_publish)
+                            self.network.get_level_data(lvl.get("level_id"), cb_fetch_for_publish)
                     
                 elif self.state == "PROFILE":
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -1205,8 +1341,8 @@ class Game:
                             is_own = self.profile_data.get('username') == self.network.username
                             is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
                             if is_own:
-                                switch_btn = pygame.Rect(config.BASE_W//2 - 100, 450, 200, 40)
-                                del_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
+                                switch_btn = pygame.Rect(config.BASE_W//2 - 100, 540, 200, 40)
+                                del_btn = pygame.Rect(config.BASE_W//2 - 100, 590, 200, 40)
                                 if switch_btn.collidepoint(logical_mouse):
                                     self.active_popup = "switch_account"
                                     self.audio.play_sfx('button.mp3')
@@ -1214,10 +1350,10 @@ class Game:
                                     self.active_popup = "delete_account_confirm"
                                     self.audio.play_sfx('button.mp3')
                             if not is_own or is_admin:
-                                cp_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 400, 80, 30)
-                                cp_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 400, 80, 30)
-                                star_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 440, 80, 30)
-                                star_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 440, 80, 30)
+                                cp_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 490, 80, 30)
+                                cp_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 490, 80, 30)
+                                star_plus_btn = pygame.Rect(config.BASE_W//2 + 120, 530, 80, 30)
+                                star_minus_btn = pygame.Rect(config.BASE_W//2 + 220, 530, 80, 30)
 
                                 if is_admin and cp_plus_btn.collidepoint(logical_mouse):
                                     self.admin_adjust_stat("creator_points", 1)
@@ -1233,14 +1369,18 @@ class Game:
                                     self.audio.play_sfx('button.mp3')
 
                             if not is_own and is_admin:
-                                b_btn = pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40)
-                                mod_btn = pygame.Rect(config.BASE_W//2 + 120, 480, 180, 34)
+                                b_btn = pygame.Rect(config.BASE_W//2 - 100, 590, 200, 40)
+                                mod_btn = pygame.Rect(config.BASE_W//2 + 120, 570, 180, 34)
+                                playtester_btn = pygame.Rect(config.BASE_W//2 + 120, 610, 180, 34)
                                 if b_btn.collidepoint(logical_mouse):
                                     username_to_ban = self.profile_data.get('username')
                                     self.network.admin_ban_user(username_to_ban, self._after_moderate)
                                     self.audio.play_sfx('button.mp3')
                                 elif mod_btn.collidepoint(logical_mouse):
                                     self.admin_toggle_mod()
+                                    self.audio.play_sfx('button.mp3')
+                                elif playtester_btn.collidepoint(logical_mouse):
+                                    self.admin_toggle_playtester()
                                     self.audio.play_sfx('button.mp3')
 
                 elif self.state == "SETTINGS":
@@ -1326,7 +1466,17 @@ class Game:
                                 folder = getattr(self.current_level, 'folder', self.get_custom_levels_dir())
                                 online_lvl = getattr(self, 'current_level', None) if folder == 'online' else None
                                 self.play_level(getattr(self.current_level, 'filename', "unknown.json"), folder, is_practice=getattr(self, 'is_practice_mode', False), reset_attempts=False, online_level=online_lvl)
-                                
+                    elif event.type == pygame.KEYDOWN and event.key in (pygame.K_a, pygame.K_LEFT, pygame.K_d, pygame.K_RIGHT):
+                        # Start-position switching -- practice mode only, never in
+                        # normal/verify play, matching a real attempt from a real start.
+                        if getattr(self, 'is_practice_mode', False) and not getattr(self, 'is_paused', False):
+                            direction = -1 if event.key in (pygame.K_a, pygame.K_LEFT) else 1
+                            target = self.current_level.get_closest_spawn(self.player.x, direction)
+                            if target:
+                                self.player.reset(start_x=target[0], start_y=target[1], start_mode=self.current_level.start_gamemode)
+                                self.checkpoints = []
+                                if hasattr(self, 'camera_y'): delattr(self, 'camera_y')
+
                 elif self.state == "EDITOR":
                     if hasattr(self, 'editor') and self.editor:
                         self.editor.handle_event(event, logical_mouse)
@@ -1458,14 +1608,30 @@ class Game:
                         u_t = self.font.render(f"User: {self.profile_data.get('username','')}", True, config.WHITE)
                         s_t = self.font.render(f"Stars: {self.profile_data.get('stars',0)}", True, config.YELLOW)
                         c_t = self.font.render(f"Creator Points: {self.profile_data.get('creator_points',0)}", True, config.GREEN)
+                        total_secs = self.profile_data.get('playtime_seconds', 0)
+                        hrs, mins = total_secs // 3600, (total_secs % 3600) // 60
+                        p_t = self.font.render(f"Playtime: {hrs}h {mins}m", True, config.CYAN)
+                        d_t = self.font.render(f"Demons Beaten: {self.profile_data.get('demons_beaten',0)}", True, config.RED)
                         self.screen.blit(u_t, (S(config.BASE_W//2) - u_t.get_width()//2, S(config.BASE_H//4 + 80)))
-                        
+
+                        badge_x = S(config.BASE_W//2) + u_t.get_width()//2 + S(10)
                         if self.profile_data.get('is_admin'):
                             admin_badge = self.font.render("ADMIN", True, config.RED)
-                            self.screen.blit(admin_badge, (S(config.BASE_W//2) + u_t.get_width()//2 + S(10), S(config.BASE_H//4 + 80)))
+                            self.screen.blit(admin_badge, (badge_x, S(config.BASE_H//4 + 80)))
+                            badge_x += admin_badge.get_width() + S(10)
+                        if self.profile_data.get('is_moderator'):
+                            mod_badge = self.font.render("MOD", True, config.PURPLE)
+                            self.screen.blit(mod_badge, (badge_x, S(config.BASE_H//4 + 80)))
+                            badge_x += mod_badge.get_width() + S(10)
+                        if self.profile_data.get('is_playtester'):
+                            pt_badge = self.font.render("PLAYTESTER", True, config.CYAN)
+                            self.screen.blit(pt_badge, (badge_x, S(config.BASE_H//4 + 80)))
+                            badge_x += pt_badge.get_width() + S(10)
 
                         self.screen.blit(s_t, (S(config.BASE_W//2) - s_t.get_width()//2, S(config.BASE_H//4 + 120)))
                         self.screen.blit(c_t, (S(config.BASE_W//2) - c_t.get_width()//2, S(config.BASE_H//4 + 160)))
+                        self.screen.blit(p_t, (S(config.BASE_W//2) - p_t.get_width()//2, S(config.BASE_H//4 + 200)))
+                        self.screen.blit(d_t, (S(config.BASE_W//2) - d_t.get_width()//2, S(config.BASE_H//4 + 240)))
                         
                         is_own = self.profile_data.get('username') == self.network.username
                         is_admin = getattr(self, 'my_profile_data', {}).get('is_admin')
@@ -1474,27 +1640,33 @@ class Game:
                             self.draw_dummy_player(self.screen, "cube", config.P_CUBE_IDX, config.P_COLOR, config.BASE_W//2 - 20, 120, 40)
                             self.screen.blit(self.font.render("Click Avatar to Customize", True, config.GRAY), (S(config.BASE_W//2) - self.font.size("Click Avatar to Customize")[0]//2, S(200)))
 
-                            switch_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(450), S(200), S(40))
+                            switch_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(540), S(200), S(40))
                             pygame.draw.rect(self.screen, config.BLUE, switch_btn, 0, S(5))
                             st = self.font.render("SWITCH ACCOUNT", True, config.WHITE)
                             self.screen.blit(st, (switch_btn.centerx - st.get_width()//2, switch_btn.centery - st.get_height()//2))
 
-                            del_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(500), S(200), S(40))
+                            del_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(590), S(200), S(40))
                             pygame.draw.rect(self.screen, config.RED, del_btn, 0, S(5))
                             dt = self.font.render("DELETE ACCOUNT", True, config.WHITE)
                             self.screen.blit(dt, (del_btn.centerx - dt.get_width()//2, del_btn.centery - dt.get_height()//2))
                         else:
                             if is_admin:
-                                b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(500), S(200), S(40))
+                                b_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(590), S(200), S(40))
                                 pygame.draw.rect(self.screen, config.ORANGE, b_btn, 0, S(5))
                                 bt = self.font.render("BAN USER", True, config.WHITE)
                                 self.screen.blit(bt, (b_btn.centerx - bt.get_width()//2, b_btn.centery - bt.get_height()//2))
 
-                                mod_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(480), S(180), S(34))
+                                mod_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(570), S(180), S(34))
                                 pygame.draw.rect(self.screen, config.PURPLE, mod_btn, 0, S(5))
                                 is_mod = self.profile_data.get('is_moderator')
                                 mt = self.font.render("REMOVE MOD" if is_mod else "MAKE MOD", True, config.WHITE)
                                 self.screen.blit(mt, (mod_btn.centerx - mt.get_width()//2, mod_btn.centery - mt.get_height()//2))
+
+                                playtester_btn = pygame.Rect(S(config.BASE_W//2 + 120), S(610), S(180), S(34))
+                                pygame.draw.rect(self.screen, config.CYAN, playtester_btn, 0, S(5))
+                                is_playtester = self.profile_data.get('is_playtester')
+                                pt_btn_t = self.font.render("REMOVE PLAYTESTER" if is_playtester else "MAKE PLAYTESTER", True, config.BLACK)
+                                self.screen.blit(pt_btn_t, (playtester_btn.centerx - pt_btn_t.get_width()//2, playtester_btn.centery - pt_btn_t.get_height()//2))
 
                         if is_admin:
                             self.draw_admin_stat_buttons()
@@ -1574,6 +1746,12 @@ class Game:
                     pygame.draw.rect(self.screen, config.PURPLE, mod_btn, 0, S(5))
                     mt = self.font.render("MODERATE", True, config.WHITE)
                     self.screen.blit(mt, (mod_btn.centerx - mt.get_width()//2, mod_btn.centery - mt.get_height()//2))
+
+                if is_admin:
+                    publish_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(590), S(200), S(40))
+                    pygame.draw.rect(self.screen, config.YELLOW, publish_btn, 0, S(5))
+                    pbt = self.font.render("PUBLISH OFFICIAL", True, config.BLACK)
+                    self.screen.blit(pbt, (publish_btn.centerx - pbt.get_width()//2, publish_btn.centery - pbt.get_height()//2))
 
                 back_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(config.BASE_H - 80), S(200), S(40))
                 bt = self.font.render("Press ESC to Return", True, config.GRAY)
@@ -2205,10 +2383,26 @@ class Game:
             
             if getattr(self, 'active_popup', None):
                 self._draw_popup()
-                
+
+            if self.network.token:
+                # Counts all time the game is open (any state), not just active
+                # gameplay -- reported in ~1 minute batches, so it's one small
+                # request/minute at most, not a burden on the server.
+                self.playtime_accum += 1.0 / config.FPS
+                if self.playtime_accum >= 60:
+                    whole_seconds = int(self.playtime_accum)
+                    self.playtime_accum -= whole_seconds
+                    self.network.report_playtime(whole_seconds, lambda r: None)
+
             pygame.display.flip()
             self.clock.tick(config.FPS)
 
+        if self.network.token and self.playtime_accum >= 1:
+            # Best-effort flush of whatever wasn't reported yet -- may not finish
+            # before the process exits, but worth trying.
+            self.network.report_playtime(int(self.playtime_accum), lambda r: None)
+
+        self.discord.close()
         pygame.quit()
         sys.exit()
 

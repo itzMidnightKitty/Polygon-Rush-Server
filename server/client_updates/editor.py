@@ -49,6 +49,8 @@ class Editor:
         self.just_exited_playtest = 0
         self.options_active = False
         self.song_browser_active = False
+        self.song_scroll = 0
+        self.song_tab = "official"  # "official" or "custom" (NG-downloaded)
         self.preview_song = None
         self.music_testing = False
         self.ui_hovered = False
@@ -56,6 +58,7 @@ class Editor:
         self.ng_id_input = None  # lazily created in draw() once a font is available
         self.ng_fetching = False
         self.ng_status_msg = ""
+        self.offset_input = None  # lazily created in draw(); song offset in seconds, e.g. "0.00"
         self.ng_status_color = None
         
         self.can_build = False
@@ -116,10 +119,10 @@ class Editor:
         self.show_notification("Redo")
 
     def color_swatch_button_rect(self):
-        return pygame.Rect(config.BASE_W - 460, config.BASE_H - 95, 55, 34)
+        return pygame.Rect(config.BASE_W - 390, config.BASE_H - 110, 55, 34)
 
     def layer_box_rect(self, i):
-        return pygame.Rect(config.BASE_W - 400 + i * 22, config.BASE_H - 55, 20, 20)
+        return pygame.Rect(config.BASE_W - 390 + i * 22, config.BASE_H - 58, 20, 20)
 
     def color_picker_box(self):
         return pygame.Rect(config.BASE_W//2 - 500, 100, 1000, 500)
@@ -162,6 +165,18 @@ class Editor:
             if obj.type == config.OBJ_GROUND_COLOR_TRIGGER and obj.x <= target_x: active_color = config.BG_COLORS[obj.color_idx]
         return active_color
 
+    def format_track_label(self, filename):
+        title, artist, is_ng = self.audio.get_track_display(filename)
+        length = self.audio.get_track_length(filename)
+        label = f"{title} by {artist}" if artist else title
+        return f"{label} {length}s"
+
+    def get_speed_preset_index(self):
+        """Index into config.STARTING_SPEED_PRESETS closest to the level's current
+        starting speed (handles legacy levels whose speed predates this preset list)."""
+        current = getattr(self.level, 'speed', config.SCROLL_SPEED)
+        return min(range(len(config.STARTING_SPEED_PRESETS)), key=lambda i: abs(config.STARTING_SPEED_PRESETS[i][1] - current))
+
     def get_next_unnamed(self):
         max_idx = 0
         if self.level.folder and os.path.exists(self.level.folder):
@@ -199,9 +214,10 @@ class Editor:
             self._ng_fetch_result = None
             self.ng_fetching = False
             if result[0] == "success":
-                _, filename, title, song_id = result
+                _, filename, title, artist, song_id = result
                 if filename not in self.audio.available_tracks:
                     self.audio.available_tracks.append(filename)
+                self.audio.set_track_meta(filename, title=title, artist=artist)
                 self.level.music = filename
                 self.level.ng_song_id = song_id
                 self.level.ng_song_name = title
@@ -258,17 +274,22 @@ class Editor:
                     idx = gamemode_cycle.index(self.level.start_gamemode) if self.level.start_gamemode in gamemode_cycle else 0
                     self.level.start_gamemode = gamemode_cycle[(idx + 1) % len(gamemode_cycle)]
                     self.unsaved_changes = True
+                if pygame.Rect(config.BASE_W//2 - 200, 210, 400, 40).collidepoint(logical_mouse):
+                    idx = self.get_speed_preset_index()
+                    new_idx = (idx + 1) % len(config.STARTING_SPEED_PRESETS)
+                    self.level.speed = config.STARTING_SPEED_PRESETS[new_idx][1]
+                    self.unsaved_changes = True
                 for i in range(6):
-                    if pygame.Rect(config.BASE_W//2 - 270 + i * 90, 250, 70, 70).collidepoint(logical_mouse):
+                    if pygame.Rect(config.BASE_W//2 - 270 + i * 90, 290, 70, 70).collidepoint(logical_mouse):
                         self.level.bg_design = i; self.unsaved_changes = True
-                if pygame.Rect(config.BASE_W//2 + 280, 265, 40, 40).collidepoint(logical_mouse):
+                if pygame.Rect(config.BASE_W//2 + 280, 305, 40, 40).collidepoint(logical_mouse):
                     self.level.start_bg_idx = (self.level.start_bg_idx + 1) % len(config.BG_COLORS); self.unsaved_changes = True
                 for i in range(6):
-                    if pygame.Rect(config.BASE_W//2 - 270 + i * 90, 380, 70, 70).collidepoint(logical_mouse):
+                    if pygame.Rect(config.BASE_W//2 - 270 + i * 90, 420, 70, 70).collidepoint(logical_mouse):
                         self.level.ground_design = i; self.unsaved_changes = True
-                if pygame.Rect(config.BASE_W//2 + 280, 395, 40, 40).collidepoint(logical_mouse):
+                if pygame.Rect(config.BASE_W//2 + 280, 435, 40, 40).collidepoint(logical_mouse):
                     self.level.start_ground_idx = (self.level.start_ground_idx + 1) % len(config.BG_COLORS); self.unsaved_changes = True
-                if pygame.Rect(config.BASE_W//2 - 100, 500, 200, 40).collidepoint(logical_mouse):
+                if pygame.Rect(config.BASE_W//2 - 100, 520, 200, 40).collidepoint(logical_mouse):
                     self.options_active = False
             return
 
@@ -284,32 +305,68 @@ class Editor:
             return
 
         if self.song_browser_active:
+            box = pygame.Rect(config.BASE_W//2 - 300, 100, 600, config.BASE_H - 200)
+            tracks = [f for f in self.audio.available_tracks if f.startswith('ng_') == (self.song_tab == "custom")]
+            list_top, list_bottom = 280, box.bottom - 75
+            row_h = 40
+            visible_rows = max(1, (list_bottom - list_top) // row_h)
+            max_scroll = max(0, len(tracks) - visible_rows)
+
+            if mouse_scroll_y != 0 and box.collidepoint(logical_mouse):
+                self.song_scroll = max(0, min(max_scroll, self.song_scroll - mouse_scroll_y))
+            self.song_scroll = max(0, min(max_scroll, self.song_scroll))
+
             if mouse_just_pressed:
-                box = pygame.Rect(config.BASE_W//2 - 300, 100, 600, config.BASE_H - 200)
                 if not box.collidepoint(logical_mouse):
                     self.audio.stop_music(); self.preview_song = None; self.song_browser_active = False; return
-                fetch_btn = pygame.Rect(config.BASE_W//2 - 20, 140, 100, 36)
+                fetch_btn = pygame.Rect(config.BASE_W//2 - 20, 165, 100, 36)
                 if fetch_btn.collidepoint(logical_mouse):
                     self.start_ng_fetch()
                     return
-                for i, song in enumerate(self.audio.available_tracks):
-                    play_btn = pygame.Rect(config.BASE_W//2 - 250, 250 + i*40, 40, 30)
-                    sel_btn = pygame.Rect(config.BASE_W//2 + 160, 250 + i*40, 90, 30)
+                off_tab_btn = pygame.Rect(config.BASE_W//2 - 280, 225, 140, 34)
+                cus_tab_btn = pygame.Rect(config.BASE_W//2 - 130, 225, 140, 34)
+                if off_tab_btn.collidepoint(logical_mouse):
+                    self.song_tab = "official"; self.song_scroll = 0; return
+                if cus_tab_btn.collidepoint(logical_mouse):
+                    self.song_tab = "custom"; self.song_scroll = 0; return
+                for row, i in enumerate(range(self.song_scroll, min(len(tracks), self.song_scroll + visible_rows))):
+                    song = tracks[i]
+                    y = list_top + row*row_h
+                    if y + row_h > list_bottom: break
+                    play_btn = pygame.Rect(config.BASE_W//2 - 250, y, 40, 30)
+                    del_btn = pygame.Rect(config.BASE_W//2 + 255, y, 25, 30)
+                    sel_btn = pygame.Rect(config.BASE_W//2 + 160, y, 90, 30)
                     if play_btn.collidepoint(logical_mouse):
                         if self.preview_song == song:
                             self.audio.stop_music(); self.preview_song = None
                         else:
-                            self.audio.play_music(song); self.preview_song = song
+                            self.audio.play_music(song, offset=getattr(self.level, 'song_offset', 0.0)); self.preview_song = song
+                    elif self.song_tab == "custom" and del_btn.collidepoint(logical_mouse):
+                        if self.preview_song == song:
+                            self.audio.stop_music(); self.preview_song = None
+                        was_selected = (self.level.music == song)
+                        self.audio.delete_track(song)
+                        if was_selected:
+                            self.level.music = None; self.level.ng_song_id = None; self.level.ng_song_name = None
+                            self.unsaved_changes = True
+                        self.song_scroll = max(0, min(self.song_scroll, max(0, len(tracks) - 1 - visible_rows)))
                     elif sel_btn.collidepoint(logical_mouse):
-                        self.level.music = song; self.level.ng_song_id = None; self.level.ng_song_name = None; self.unsaved_changes = True; self.audio.stop_music(); self.preview_song = None; self.song_browser_active = False
+                        self.level.music = song
+                        _, _, is_ng = self.audio.get_track_display(song)
+                        if not is_ng:
+                            self.level.ng_song_id = None; self.level.ng_song_name = None
+                        self.unsaved_changes = True; self.audio.stop_music(); self.preview_song = None; self.song_browser_active = False
             return
 
         if self.music_testing:
-            config.apply_speed_triggers(self.level.objects, self.scroll_x + 200, self.level)
-            self.scroll_x += getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6))
-            if self.scroll_x + 200 > self.level.end_x:
+            # Unlike playtesting, this doesn't take over the editor at all -- the camera
+            # is freely scrollable/zoomable and you can keep building, same as normal
+            # edit mode; only the playhead marker (music_test_x) advances on its own,
+            # driven by the level's speed rather than your camera movement.
+            config.apply_speed_triggers(self.level.objects, self.music_test_x + 200, self.level)
+            self.music_test_x += getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6))
+            if self.music_test_x + 200 > self.level.end_x:
                 self.music_testing = False; self.audio.stop_music()
-            return
 
         if mouse_scroll_y != 0:
             old_zoom = self.zoom
@@ -549,14 +606,14 @@ class Editor:
 
         def worker():
             try:
-                data, title = newgrounds.fetch_song_info(song_id)
+                data, title, artist = newgrounds.fetch_song_info(song_id)
                 filename = newgrounds.safe_filename(song_id, title)
                 music_dir = os.path.join("audio", "music")
                 os.makedirs(music_dir, exist_ok=True)
                 path = os.path.join(music_dir, filename)
                 with open(path, "wb") as f:
                     f.write(data)
-                self._ng_fetch_result = ("success", filename, title, song_id)
+                self._ng_fetch_result = ("success", filename, title, artist, song_id)
             except newgrounds.NewgroundsError as e:
                 self._ng_fetch_result = ("error", str(e))
             except Exception as e:
@@ -582,17 +639,39 @@ class Editor:
                 action = self.ng_id_input.handle_event(event, logical_mouse)
                 if action == "submit":
                     self.start_ng_fetch()
+            if self.song_browser_active and self.offset_input:
+                self.offset_input.handle_event(event, logical_mouse)
+                try:
+                    self.level.song_offset = float(self.offset_input.text)
+                    self.unsaved_changes = True
+                except ValueError:
+                    pass  # keep the last valid offset while the field holds partial/invalid text
             return
 
 
         if self.playtesting:
             if event.type == 768 and event.key == 110: # KEYDOWN, K_n
                 self.noclip = not getattr(self, 'noclip', False)
+            elif event.type == pygame.KEYDOWN and event.key in (pygame.K_a, pygame.K_LEFT, pygame.K_d, pygame.K_RIGHT):
+                direction = -1 if event.key in (pygame.K_a, pygame.K_LEFT) else 1
+                target = self.level.get_closest_spawn(self.test_player.x, direction)
+                if target:
+                    self.test_player.reset(start_x=target[0], start_y=target[1], start_mode=self.level.start_gamemode)
+                    self.playtest_trail = []
+                    # Playtest music is synced to spawn position when it first starts
+                    # (see K_RETURN below) -- jumping to a different spawn moves the
+                    # timeline far enough that it needs the same re-sync, or the song
+                    # keeps playing from wherever it already was.
+                    if self.level.music:
+                        offset = max(0.0, (target[0] - 200) / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS) + getattr(self.level, 'song_offset', 0.0))
+                        self.audio.play_music(self.level.music, offset=offset)
             return
         
-        if self.music_testing:
-            if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_m):
-                self.music_testing = False; self.audio.stop_music()
+        # music_testing only intercepts ESC/M to stop the preview -- every other key
+        # falls through to normal handling below, so it doesn't take over the editor
+        # like playtesting does.
+        if self.music_testing and event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_m):
+            self.music_testing = False; self.audio.stop_music()
             return
 
         if event.type == pygame.KEYDOWN:
@@ -645,6 +724,7 @@ class Editor:
                         if o.type not in config.NON_ROTATABLE:
                             if event.key == pygame.K_q: o.rotation = (o.rotation - 90) % 360
                             else: o.rotation = (o.rotation + 90) % 360
+                            o.update_rect()
                 elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
                     self.save_state()
                     self.unsaved_changes = True
@@ -685,11 +765,19 @@ class Editor:
                     wx = (logical_mouse[0] / self.zoom) + self.scroll_x
                     wy = (logical_mouse[1] / self.zoom) + self.scroll_y
                     gx, gy = (wx // config.GRID_SIZE) * config.GRID_SIZE, (wy // config.GRID_SIZE) * config.GRID_SIZE
+                    def round_half_away_from_zero(v):
+                        # Python's round() rounds .5 to the nearest *even* integer, which
+                        # collapses objects sitting exactly half a grid cell from the
+                        # clipboard's centroid (very common for symmetric multi-object
+                        # selections) onto the same cell as each other. Round .5 away from
+                        # zero instead, like everyone actually expects grid-snap to behave.
+                        import math
+                        return math.floor(v + 0.5) if v >= 0 else math.ceil(v - 0.5)
                     for o_dict in self.clipboard:
                         dx = o_dict['x'] - self.clipboard_center[0]
                         dy = o_dict['y'] - self.clipboard_center[1]
-                        nx = gx + round(dx / config.GRID_SIZE) * config.GRID_SIZE
-                        ny = gy + round(dy / config.GRID_SIZE) * config.GRID_SIZE
+                        nx = gx + round_half_away_from_zero(dx / config.GRID_SIZE) * config.GRID_SIZE
+                        ny = gy + round_half_away_from_zero(dy / config.GRID_SIZE) * config.GRID_SIZE
                         if nx < 0: nx = 0
                         new_obj = GameObject(o_dict['type'], nx, ny, o_dict.get('rotation',0), o_dict.get('color_idx',0), o_dict.get('flip_x',False), o_dict.get('flip_y',False), layer=o_dict.get('layer',0))
                         self.level.objects.append(new_obj)
@@ -705,10 +793,14 @@ class Editor:
             if event.key == pygame.K_m:
                 if self.level.music:
                     self.music_testing = True
-                    self.scroll_x = max(0, self.level.get_spawn_x() - 200)
+                    # Start from wherever the camera already is (its left edge), not the
+                    # level's spawn point -- camera stays put for the whole preview (see
+                    # the music_testing branch in update()); only music_test_x, the
+                    # playhead, advances from here.
+                    self.music_test_x = self.scroll_x + 200
                     self.level.speed = getattr(config, 'SCROLL_SPEED', 6)
                     for obj in self.level.objects: obj.activated = False
-                    offset = max(0.0, (self.level.get_spawn_x() - 200) / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS))
+                    offset = max(0.0, self.scroll_x / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS) + getattr(self.level, 'song_offset', 0.0))
                     self.audio.play_music(self.level.music, offset=offset)
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self.playtesting = True
@@ -722,12 +814,12 @@ class Editor:
                 if hasattr(self, 'camera_y'): delattr(self, 'camera_y')
                 
                 if self.level.music: 
-                    offset = max(0.0, (spawn_x - 200) / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS))
+                    offset = max(0.0, (spawn_x - 200) / (getattr(self.level, 'speed', getattr(config, 'SCROLL_SPEED', 6)) * config.FPS) + getattr(self.level, 'song_offset', 0.0))
                     self.audio.play_music(self.level.music, offset=offset)
 
     def draw_layer_controls(self, surface, font):
         target_objs = self.selected_objs if (self.mode == "EDIT" and self.selected_objs) else None
-        surface.blit(font.render("Layer:", True, config.WHITE), (S(config.BASE_W - 460), S(config.BASE_H - 75)))
+        surface.blit(font.render("Layer:", True, config.WHITE), (S(config.BASE_W - 460), S(config.BASE_H - 58)))
         if target_objs:
             common_layer = target_objs[0].layer if all(o.layer == target_objs[0].layer for o in target_objs) else None
         else:
@@ -743,7 +835,7 @@ class Editor:
     def draw_color_and_layer_controls(self, surface, font):
         target_objs = self.selected_objs if (self.mode == "EDIT" and self.selected_objs) else None
 
-        surface.blit(font.render("Color:", True, config.WHITE), (S(config.BASE_W - 460), S(config.BASE_H - 115)))
+        surface.blit(font.render("Color:", True, config.WHITE), (S(config.BASE_W - 460), S(config.BASE_H - 108)))
         swatch = self.color_swatch_button_rect()
         swatch_s = pygame.Rect(S(swatch.x), S(swatch.y), S(swatch.w), S(swatch.h))
         if target_objs:
@@ -864,8 +956,9 @@ class Editor:
             pygame.draw.line(surface, config.WHITE, (0, screen_gy), (config.RENDER_W, screen_gy), max(1, S(2)))
 
         if self.music_testing:
-            playhead_x = int((self.scroll_x + 200 - self.scroll_x) * self.zoom)
-            pygame.draw.line(surface, config.MAGENTA, (S(playhead_x), 0), (S(playhead_x), config.RENDER_H), max(2, S(4*self.zoom)))
+            playhead_x = int((getattr(self, 'music_test_x', self.scroll_x) - self.scroll_x) * self.zoom)
+            if -50 <= playhead_x <= config.BASE_W + 50:
+                pygame.draw.line(surface, config.MAGENTA, (S(playhead_x), 0), (S(playhead_x), config.RENDER_H), max(2, S(4*self.zoom)))
 
         pygame.draw.rect(surface, config.DARK_GRAY, (0, 0, config.RENDER_W, S(40)))
         pygame.draw.line(surface, config.WHITE, (0, S(40)), (config.RENDER_W, S(40)), max(1, S(2)))
@@ -1029,11 +1122,19 @@ class Editor:
             surface.blit(t, (S(config.BASE_W//2) - t.get_width()//2, S(110)))
 
             if self.ng_id_input is None:
-                self.ng_id_input = TextInput(config.BASE_W//2 - 300 + 20, 140, 260, 36, font, placeholder="Newgrounds song ID")
+                self.ng_id_input = TextInput(config.BASE_W//2 - 300 + 20, 165, 260, 36, font, placeholder="Newgrounds song ID")
             self.ng_id_input.font = font
             self.ng_id_input.draw(surface)
 
-            fetch_btn = pygame.Rect(S(config.BASE_W//2 - 20), S(140), S(100), S(36))
+            offlbl = font.render("Offset (s):", True, config.WHITE)
+            surface.blit(offlbl, (S(config.BASE_W//2 + 90), S(165) + S(36)//2 - offlbl.get_height()//2))
+            if self.offset_input is None:
+                self.offset_input = TextInput(config.BASE_W//2 + 190, 165, 90, 36, font, placeholder="0.00")
+                self.offset_input.text = f"{getattr(self.level, 'song_offset', 0.0):.2f}"
+            self.offset_input.font = font
+            self.offset_input.draw(surface)
+
+            fetch_btn = pygame.Rect(S(config.BASE_W//2 - 20), S(165), S(100), S(36))
             pygame.draw.rect(surface, (60, 60, 30) if self.ng_fetching else config.YELLOW, fetch_btn, 0, S(5))
             ft = font.render("...", True, config.BLACK) if self.ng_fetching else font.render("FETCH", True, config.BLACK)
             surface.blit(ft, (fetch_btn.centerx - ft.get_width()//2, fetch_btn.centery - ft.get_height()//2))
@@ -1041,23 +1142,67 @@ class Editor:
             if self.ng_status_msg:
                 color = self.ng_status_color or config.GRAY
                 msg_t = font.render(self.ng_status_msg, True, color)
-                surface.blit(msg_t, (S(config.BASE_W//2 - 300 + 20), S(182)))
+                surface.blit(msg_t, (S(config.BASE_W//2 - 300 + 20), S(207)))
 
-            for i, song in enumerate(self.audio.available_tracks):
-                play_btn = pygame.Rect(S(config.BASE_W//2 - 250), S(250 + i*40), S(40), S(30))
+            off_tab_btn = pygame.Rect(S(config.BASE_W//2 - 280), S(225), S(140), S(34))
+            cus_tab_btn = pygame.Rect(S(config.BASE_W//2 - 130), S(225), S(140), S(34))
+            pygame.draw.rect(surface, config.CYAN if self.song_tab == "official" else config.GRAY, off_tab_btn, 0, S(5))
+            pygame.draw.rect(surface, config.CYAN if self.song_tab == "custom" else config.GRAY, cus_tab_btn, 0, S(5))
+            ot = font.render("OFFICIAL", True, config.BLACK)
+            ct = font.render("CUSTOM", True, config.BLACK)
+            surface.blit(ot, (off_tab_btn.centerx - ot.get_width()//2, off_tab_btn.centery - ot.get_height()//2))
+            surface.blit(ct, (cus_tab_btn.centerx - ct.get_width()//2, cus_tab_btn.centery - ct.get_height()//2))
+
+            tracks = [f for f in self.audio.available_tracks if f.startswith('ng_') == (self.song_tab == "custom")]
+            list_top = 280
+            row_h = 40
+            list_area = pygame.Rect(S(config.BASE_W//2 - 300), S(list_top), S(600), box.bottom - S(list_top) - S(75))
+            visible_rows = max(1, list_area.height // S(row_h))
+            max_scroll = max(0, len(tracks) - visible_rows)
+            self.song_scroll = max(0, min(max_scroll, self.song_scroll))
+
+            surface.set_clip(list_area)
+            for row, i in enumerate(range(self.song_scroll, len(tracks))):
+                y = list_top + row*row_h
+                if S(y) - list_area.y > list_area.height: break
+                song = tracks[i]
+                play_btn = pygame.Rect(S(config.BASE_W//2 - 250), S(y), S(40), S(30))
                 pygame.draw.rect(surface, config.YELLOW if self.preview_song == song else config.GRAY, play_btn, 0, S(5))
                 pt = font.render("||" if self.preview_song == song else ">", True, config.BLACK if self.preview_song == song else config.WHITE)
                 surface.blit(pt, (play_btn.centerx - pt.get_width()//2, play_btn.centery - pt.get_height()//2))
 
-                rect = pygame.Rect(S(config.BASE_W//2 - 200), S(250 + i*40), S(350), S(30))
+                rect_w = 315 if self.song_tab == "custom" else 350
+                rect = pygame.Rect(S(config.BASE_W//2 - 200), S(y), S(rect_w), S(30))
                 pygame.draw.rect(surface, config.GRAY, rect, 0, S(5))
-                st = font.render(song, True, config.WHITE)
+                label = self.format_track_label(song)
+                st = font.render(label, True, config.WHITE)
+                # shrink to fit rather than overflow the row for long titles/artists
+                max_w = rect.w - S(20)
+                if st.get_width() > max_w and len(label) > 0:
+                    while len(label) > 3 and font.size(label + "...")[0] > max_w:
+                        label = label[:-1]
+                    st = font.render(label + "...", True, config.WHITE)
                 surface.blit(st, (rect.x + S(10), rect.centery - st.get_height()//2))
 
-                sel_btn = pygame.Rect(S(config.BASE_W//2 + 160), S(250 + i*40), S(90), S(30))
+                if self.song_tab == "custom":
+                    del_btn = pygame.Rect(S(config.BASE_W//2 + 255), S(y), S(25), S(30))
+                    pygame.draw.rect(surface, config.RED, del_btn, 0, S(5))
+                    dt = font.render("X", True, config.WHITE)
+                    surface.blit(dt, (del_btn.centerx - dt.get_width()//2, del_btn.centery - dt.get_height()//2))
+
+                sel_btn = pygame.Rect(S(config.BASE_W//2 + 160), S(y), S(90), S(30))
                 pygame.draw.rect(surface, config.GREEN, sel_btn, 0, S(5))
                 s_t = font.render("SELECT", True, config.BLACK)
                 surface.blit(s_t, (sel_btn.centerx - s_t.get_width()//2, sel_btn.centery - s_t.get_height()//2))
+            surface.set_clip(None)
+
+            if not tracks:
+                empty_t = font.render("No custom songs yet — fetch one from Newgrounds above." if self.song_tab == "custom" else "No official songs found.", True, config.GRAY)
+                surface.blit(empty_t, (S(config.BASE_W//2) - empty_t.get_width()//2, S(list_top + 20)))
+
+            if len(tracks) > visible_rows:
+                scroll_hint = font.render(f"({self.song_scroll+1}-{min(len(tracks), self.song_scroll+visible_rows)} of {len(tracks)} — scroll for more)", True, config.GRAY)
+                surface.blit(scroll_hint, (S(config.BASE_W//2) - scroll_hint.get_width()//2, box.bottom - S(55)))
 
             tip = font.render("(Click anywhere outside to close)", True, config.GRAY)
             surface.blit(tip, (S(config.BASE_W//2) - tip.get_width()//2, box.bottom - S(30)))
@@ -1080,47 +1225,46 @@ class Editor:
             mt = font.render(f"STARTING GAMEMODE: {self.level.start_gamemode.upper()}", True, config.BLACK)
             surface.blit(mt, (mode_btn.centerx - mt.get_width()//2, mode_btn.centery - mt.get_height()//2))
 
-            surface.blit(font.render("Background Design:", True, config.WHITE), (S(config.BASE_W//2 - 270), S(220)))
+            speed_btn = pygame.Rect(S(config.BASE_W//2 - 200), S(210), S(400), S(40))
+            pygame.draw.rect(surface, config.GRAY, speed_btn, 0, S(5))
+            pygame.draw.rect(surface, config.WHITE, speed_btn, max(1, S(2)), S(5))
+            speed_name = config.STARTING_SPEED_PRESETS[self.get_speed_preset_index()][0]
+            spt = font.render(f"STARTING SPEED: {speed_name.upper()}", True, config.BLACK)
+            surface.blit(spt, (speed_btn.centerx - spt.get_width()//2, speed_btn.centery - spt.get_height()//2))
+
+            surface.blit(font.render("Background Design:", True, config.WHITE), (S(config.BASE_W//2 - 270), S(260)))
             for i in range(6):
-                rect = pygame.Rect(S(config.BASE_W//2 - 270 + i * 90), S(250), S(70), S(70))
+                rect = pygame.Rect(S(config.BASE_W//2 - 270 + i * 90), S(290), S(70), S(70))
                 sub_surf = pygame.Surface((70, 70))
                 draw_world_background(sub_surf, 0, 0, config.BG_COLORS[self.level.start_bg_idx], i)
                 scaled_sub = pygame.transform.scale(sub_surf, (S(70), S(70)))
                 surface.blit(scaled_sub, rect)
                 pygame.draw.rect(surface, config.GREEN if self.level.bg_design == i else config.WHITE, rect, max(1, S(3)) if self.level.bg_design == i else max(1, S(1)))
-            
-            surface.blit(font.render("BG", True, config.WHITE), (S(config.BASE_W//2 + 280), S(240)))
-            cbox = pygame.Rect(S(config.BASE_W//2 + 280), S(265), S(40), S(40))
+
+            surface.blit(font.render("BG", True, config.WHITE), (S(config.BASE_W//2 + 280), S(280)))
+            cbox = pygame.Rect(S(config.BASE_W//2 + 280), S(305), S(40), S(40))
             pygame.draw.rect(surface, config.BG_COLORS[self.level.start_bg_idx], cbox)
             pygame.draw.rect(surface, config.WHITE, cbox, max(1, S(2)))
 
-            surface.blit(font.render("Ground Design:", True, config.WHITE), (S(config.BASE_W//2 - 270), S(350)))
+            surface.blit(font.render("Ground Design:", True, config.WHITE), (S(config.BASE_W//2 - 270), S(390)))
             for i in range(6):
-                rect = pygame.Rect(S(config.BASE_W//2 - 270 + i * 90), S(380), S(70), S(70))
+                rect = pygame.Rect(S(config.BASE_W//2 - 270 + i * 90), S(420), S(70), S(70))
                 sub_surf = pygame.Surface((70, 70))
                 draw_world_ground(sub_surf, 0, config.GROUND_Y - 35, 1.0, config.BG_COLORS[self.level.start_ground_idx], i, "cube")
                 scaled_sub = pygame.transform.scale(sub_surf, (S(70), S(70)))
                 surface.blit(scaled_sub, rect)
                 pygame.draw.rect(surface, config.GREEN if self.level.ground_design == i else config.WHITE, rect, max(1, S(3)) if self.level.ground_design == i else max(1, S(1)))
 
-            surface.blit(font.render("GND", True, config.WHITE), (S(config.BASE_W//2 + 280), S(370)))
-            gbox = pygame.Rect(S(config.BASE_W//2 + 280), S(395), S(40), S(40))
+            surface.blit(font.render("GND", True, config.WHITE), (S(config.BASE_W//2 + 280), S(410)))
+            gbox = pygame.Rect(S(config.BASE_W//2 + 280), S(435), S(40), S(40))
             pygame.draw.rect(surface, config.BG_COLORS[self.level.start_ground_idx], gbox)
             pygame.draw.rect(surface, config.WHITE, gbox, max(1, S(2)))
 
-            hg_btn = pygame.Rect(S(config.BASE_W//2 - 200), S(450), S(190), S(40))
-            pygame.draw.rect(surface, config.GREEN if self.hide_ground else config.GRAY, hg_btn, 0, S(5))
-            pygame.draw.rect(surface, config.WHITE, hg_btn, max(1, S(2)), S(5))
-            hgt = font.render("HIDE GROUND", True, config.BLACK if self.hide_ground else config.WHITE)
-            surface.blit(hgt, (hg_btn.centerx - hgt.get_width()//2, hg_btn.centery - hgt.get_height()//2))
+            # NOCLIP / HIDE GROUND are already toggled from the always-visible top bar
+            # (they used to be duplicated here, unscaled and overlapping the design
+            # swatches, and weren't even wired to a click handler — removed).
 
-            nc_btn = pygame.Rect(config.BASE_W//2 - 120, 240, 100, 40)
-            pygame.draw.rect(surface, config.GREEN if getattr(self, 'noclip', False) else config.GRAY, nc_btn, 0, S(5))
-            pygame.draw.rect(surface, config.WHITE, nc_btn, max(1, S(2)), S(5))
-            nct = font.render("NOCLIP", True, config.BLACK if getattr(self, 'noclip', False) else config.WHITE)
-            surface.blit(nct, (nc_btn.centerx - nct.get_width()//2, nc_btn.centery - nct.get_height()//2))
-
-            close_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(500), S(200), S(40))
+            close_btn = pygame.Rect(S(config.BASE_W//2 - 100), S(520), S(200), S(40))
             pygame.draw.rect(surface, config.RED, close_btn, 0, S(5))
             ct = font.render("CLOSE", True, config.WHITE)
             surface.blit(ct, (close_btn.centerx - ct.get_width()//2, close_btn.centery - ct.get_height()//2))

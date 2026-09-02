@@ -34,32 +34,31 @@ class Player:
     def update(self, keys, objects, scroll_speed, noclip=False, ignore_mouse=False):
         if self.dead or self.won: return
 
+        # Mode-switch hitbox resizing always anchors to the edge that faces the
+        # current effective floor (by gravity_dir), never a centered split. A
+        # centered resize could grow the new, larger hitbox toward the ground/a
+        # ledge the old, shorter hitbox wasn't actually touching (e.g. ship->cube
+        # while flying low), causing an unfair instant clip-death right at the
+        # transition. Anchoring by gravity_dir is always well-defined, airborne
+        # or not, so on_ground/on_roof no longer need to be consulted here.
         if self.mode == "wave":
             if self.width != 24:
-                if self.on_ground: self.y += self.height - 24
-                elif self.on_roof: pass
-                else: self.y += (self.height - 24) / 2
+                if self.gravity_dir == 1: self.y += self.height - 24
                 self.width, self.height = 24, 24
                 self.rect.width, self.rect.height = 24, 24
         elif self.mode == "ship":
             if self.width != 28:
-                if self.on_ground: self.y += self.height - 16
-                elif self.on_roof: pass
-                else: self.y += (self.height - 16) / 2
+                if self.gravity_dir == 1: self.y += self.height - 16
                 self.width, self.height = 28, 16
                 self.rect.width, self.rect.height = 28, 16
         elif self.mode == "ufo":
             if self.width != 28:
-                if self.on_ground: self.y += self.height - 28
-                elif self.on_roof: pass
-                else: self.y += (self.height - 28) / 2
+                if self.gravity_dir == 1: self.y += self.height - 28
                 self.width, self.height = 28, 28
                 self.rect.width, self.rect.height = 28, 28
         else:
             if self.width != config.GRID_SIZE:
-                if self.on_ground: self.y -= config.GRID_SIZE - self.height
-                elif self.on_roof: pass
-                else: self.y -= (config.GRID_SIZE - self.height) / 2
+                if self.gravity_dir == 1: self.y -= config.GRID_SIZE - self.height
                 self.width, self.height = config.GRID_SIZE, config.GRID_SIZE
                 self.rect.width, self.rect.height = config.GRID_SIZE, config.GRID_SIZE
 
@@ -78,6 +77,16 @@ class Player:
 
         if self.mode == "cube":
             self.vel_y += gravity_force
+            # Terminal velocity cap. Without this, a long fall (a tall drop, or repeatedly
+            # missing a landing) lets vel_y grow unbounded frame after frame: fall speed
+            # keeps ramping up well past what a jump ever produces (feels "off" specifically
+            # while falling, never while jumping), and a high enough vel_y makes the player
+            # move more than an object's width in a single frame, which is exactly how a
+            # pad/portal/orb gets skipped over entirely (collision only checks the current
+            # frame's position, so a big enough jump between frames can land past a thin
+            # object without ever overlapping it). Every other mode already caps vel_y;
+            # cube and ball were the two missing it.
+            self.vel_y = max(min(self.vel_y, config.TERMINAL_VELOCITY), -config.TERMINAL_VELOCITY)
             if getattr(self, 'on_ground', False): self.coyote_timer = 4
             elif getattr(self, 'coyote_timer', 0) > 0: self.coyote_timer -= 1
             
@@ -99,6 +108,7 @@ class Player:
             
         elif self.mode == "ball":
             self.vel_y += gravity_force
+            self.vel_y = max(min(self.vel_y, config.TERMINAL_VELOCITY), -config.TERMINAL_VELOCITY)
             if consume_jump and (self.on_ground or self.on_roof):
                 self.gravity_dir *= -1
                 self.vel_y = 0
@@ -145,7 +155,14 @@ class Player:
         if self.mode == 'cube' and self.rect.bottom <= -3000:
             self.die(noclip)
 
-        inner_rect = self.rect.inflate(-20, -20)
+        # All solid-block death checks (ceiling contact, corner/side grazes, overhead spikes)
+        # are judged against this smaller hitbox concentric with the cube's icon, not the
+        # full outer sprite rect -- matching the "blue inner hitbox" visible on the icon.
+        # This lets a jump that only grazes a block's edge or corner visually survive
+        # (classic "hitbox is smaller than the sprite" feel), while genuinely touching it
+        # still kills. Non-death collision resolution (landing, ground/roof clamping) still
+        # uses the full outer rect so standing/sliding still looks correctly flush.
+        core_rect = self.rect.inflate(-16, -16)
         for obj in objects:
             if obj.is_solid() and self.rect.colliderect(obj.rect):
                 if self.mode == "wave":
@@ -153,16 +170,32 @@ class Player:
                 else:
                     # Y-collisions using a slightly narrower hitbox so you slide off edges instead of hovering
                     y_rect = self.rect.inflate(-12, 0)
-                    if self.vel_y > 0 and prev_bottom <= obj.rect.top + abs(self.vel_y) + 2: 
+                    ceiling_case = self.mode == "cube" and (
+                        (self.vel_y > 0 and self.gravity_dir == -1) or (self.vel_y < 0 and self.gravity_dir == 1)
+                    )
+                    if self.vel_y > 0 and prev_bottom <= obj.rect.top + abs(self.vel_y) + 2:
                         if y_rect.right > obj.rect.left and y_rect.left < obj.rect.right:
-                            self.rect.bottom = obj.rect.top; self.y = self.rect.y; self.vel_y = 0
-                            if self.gravity_dir == 1: self.on_ground = True
-                            elif self.gravity_dir == -1: self.on_roof = True
-                    elif self.vel_y < 0 and prev_top >= obj.rect.bottom - abs(self.vel_y) - 2: 
+                            if ceiling_case:
+                                if noclip:
+                                    pass  # clip straight through in noclip
+                                elif core_rect.right > obj.rect.left and core_rect.left < obj.rect.right and core_rect.bottom > obj.rect.top:
+                                    self.die(noclip)
+                                # else: outer hitbox grazes the ceiling but the core clears it -- survive, no clamp
+                            else:
+                                self.rect.bottom = obj.rect.top; self.y = self.rect.y; self.vel_y = 0
+                                if self.gravity_dir == 1: self.on_ground = True
+                                elif self.gravity_dir == -1: self.on_roof = True
+                    elif self.vel_y < 0 and prev_top >= obj.rect.bottom - abs(self.vel_y) - 2:
                         if y_rect.right > obj.rect.left and y_rect.left < obj.rect.right:
-                            self.rect.top = obj.rect.bottom; self.y = self.rect.y; self.vel_y = 0
-                            if self.gravity_dir == -1: self.on_ground = True
-                            elif self.gravity_dir == 1: self.on_roof = True
+                            if ceiling_case:
+                                if noclip:
+                                    pass
+                                elif core_rect.right > obj.rect.left and core_rect.left < obj.rect.right and core_rect.top < obj.rect.bottom:
+                                    self.die(noclip)
+                            else:
+                                self.rect.top = obj.rect.bottom; self.y = self.rect.y; self.vel_y = 0
+                                if self.gravity_dir == -1: self.on_ground = True
+                                elif self.gravity_dir == 1: self.on_roof = True
 
         if self.mode == "cube":
             if self.on_ground:
@@ -256,10 +289,18 @@ class Player:
                 elif obj.type == config.OBJ_PAD_BLUE:
                     current_pads.add(id(obj))
                     if id(obj) not in self.active_pads:
-                        self.gravity_dir *= -1
-                        self.vel_y = -self.vel_y if self.vel_y != 0 else -10.0 * self.gravity_dir
-                        self.on_ground = False; self.on_roof = False
-                        self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
+                        # Same orientation gate as the yellow/purple pads just above: a
+                        # ceiling-mounted blue pad (meant to flip a reversed-gravity player
+                        # back to normal) must not also fire for a normal-gravity player who
+                        # merely brushes it while flying past underneath -- that was firing
+                        # unconditionally before, which is exactly what turns a row of mixed-
+                        # mount blue pads into runaway, unpredictable gravity flips/velocity.
+                        is_reversed_pad = obj.rotation == 180
+                        if is_reversed_pad == (self.gravity_dir == -1):
+                            self.gravity_dir *= -1
+                            self.vel_y = -self.vel_y if self.vel_y != 0 else -10.0 * self.gravity_dir
+                            self.on_ground = False; self.on_roof = False
+                            self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
                 elif obj.type == config.OBJ_ORB_YELLOW:
                     overlapping_orb = True
                     if consume_jump and not self.orb_touched_last_frame:
@@ -276,13 +317,24 @@ class Player:
                         self.gravity_dir *= -1; self.vel_y = 0; self.on_ground = False; self.orb_touched_last_frame = True; self.jump_orb_ready = False
                         self.target_rotation = round(self.rotation / 90) * 90 - 180 * self.gravity_dir
                 elif obj.is_deadly():
-                    self.die(noclip)
-
-                if obj.is_solid() and self.mode != "wave" and self.rect.colliderect(obj.rect):
-                    if inner_rect.right > obj.rect.left and inner_rect.left < obj.rect.right:
-                        margin_y = 2 if self.mode == "ship" else 14
-                        if self.rect.bottom > obj.rect.top + margin_y and self.rect.top < obj.rect.bottom - margin_y:
+                    # A danger object positioned above the cube's own center (a spike/saw
+                    # hanging from the ceiling, jumped into head-on) is checked against the
+                    # small core hitbox, same as a solid ceiling -- grazing it with the outer
+                    # visual sprite shouldn't kill if the actual core never reaches it. Side
+                    # or below contact (running into a spike, standing on a saw, etc.) still
+                    # uses the full outer hitbox as before.
+                    overhead = self.mode == 'cube' and (
+                        (self.gravity_dir == 1 and obj.rect.bottom <= self.rect.centery + 6) or
+                        (self.gravity_dir == -1 and obj.rect.top >= self.rect.centery - 6)
+                    )
+                    if overhead:
+                        if core_rect.colliderect(obj.rect):
                             self.die(noclip)
+                    else:
+                        self.die(noclip)
+
+                if obj.is_solid() and self.mode != "wave" and core_rect.colliderect(obj.rect):
+                    self.die(noclip)
 
         self.active_pads = current_pads
         if not overlapping_orb: self.orb_touched_last_frame = False

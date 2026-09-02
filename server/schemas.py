@@ -10,10 +10,13 @@ class UserResponse(BaseModel):
     username: str
     is_admin: bool
     is_moderator: bool
+    is_playtester: bool
     official_stars: int
     user_stars: int
     stars: int
     creator_points: int
+    playtime_seconds: int
+    demons_beaten: int
     icon_cube: int
     icon_ship: int
     icon_ball: int

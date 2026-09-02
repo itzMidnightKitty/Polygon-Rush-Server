@@ -180,6 +180,11 @@ class NetworkManager:
         t.daemon = True
         t.start()
 
+    def report_playtime(self, seconds, callback):
+        t = threading.Thread(target=self._make_request, args=("POST", "/users/me/playtime", {"seconds": seconds}, callback))
+        t.daemon = True
+        t.start()
+
     def admin_update_stats(self, username, stat_changes, callback):
         t = threading.Thread(target=self._make_request, args=("POST", f"/admin/users/{username}/stats", stat_changes, callback))
         t.daemon = True
@@ -187,6 +192,35 @@ class NetworkManager:
 
     def admin_set_user_mod(self, username, is_mod, callback):
         t = threading.Thread(target=self._make_request, args=("POST", f"/admin/users/{username}/mod", {"is_moderator": is_mod}, callback))
+        t.daemon = True
+        t.start()
+
+    def admin_set_user_playtester(self, username, is_playtester, callback):
+        t = threading.Thread(target=self._make_request, args=("POST", f"/admin/users/{username}/playtester", {"is_playtester": is_playtester}, callback))
+        t.daemon = True
+        t.start()
+
+    def get_official_levels_manifest(self, callback):
+        t = threading.Thread(target=self._make_request, args=("GET", "/official_levels/manifest", None, callback))
+        t.daemon = True
+        t.start()
+
+    def download_official_level(self, filename, callback):
+        def _download():
+            try:
+                response = requests.get(f"{self.base_url}/official_levels/download", params={"file": filename}, timeout=15)
+                if response.status_code == 200:
+                    callback({"success": True, "text": response.text})
+                else:
+                    callback({"success": False, "error": f"HTTP {response.status_code}"})
+            except Exception as e:
+                callback({"success": False, "error": str(e)})
+        t = threading.Thread(target=_download)
+        t.daemon = True
+        t.start()
+
+    def upload_official_level(self, filename, data_str, callback):
+        t = threading.Thread(target=self._make_request, args=("POST", "/admin/official_levels/upload", {"filename": filename, "data": data_str}, callback))
         t.daemon = True
         t.start()
 

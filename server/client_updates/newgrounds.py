@@ -23,7 +23,9 @@ class NewgroundsError(Exception):
 
 def fetch_song_info(song_id):
     """Given a numeric Newgrounds audio ID, download the track and return
-    (mp3_bytes, title). Raises NewgroundsError with a user-facing message on failure."""
+    (mp3_bytes, title, artist). artist may be None if the page's title wasn't
+    in the usual "Artist - Title" form. Raises NewgroundsError with a
+    user-facing message on failure."""
     song_id = str(song_id).strip()
     if not song_id.isdigit():
         raise NewgroundsError("Newgrounds ID must be a number (e.g. 1605982).")
@@ -46,7 +48,14 @@ def fetch_song_info(song_id):
     audio_url = html.unescape(audio_match.group(1))
 
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', resp.text)
-    title = html.unescape(title_match.group(1)) if title_match else f"NG Song {song_id}"
+    raw_title = html.unescape(title_match.group(1)) if title_match else f"NG Song {song_id}"
+
+    # Newgrounds page titles are conventionally "Artist - Title".
+    artist = None
+    title = raw_title
+    if " - " in raw_title:
+        artist, title = raw_title.split(" - ", 1)
+        artist, title = artist.strip(), title.strip()
 
     try:
         audio_resp = requests.get(audio_url, headers=headers, timeout=DOWNLOAD_TIMEOUT)
@@ -55,11 +64,13 @@ def fetch_song_info(song_id):
     if audio_resp.status_code != 200:
         raise NewgroundsError(f"Failed to download the audio file (HTTP {audio_resp.status_code}).")
 
-    return audio_resp.content, title
+    return audio_resp.content, title, artist
 
 
 def safe_filename(song_id, title):
-    """Build a filesystem-safe .mp3 filename for a downloaded NG song."""
+    """Build a filesystem-safe .mp3 filename for a downloaded NG song. The slug
+    is only ever used as a fallback display name (real title/artist are stored
+    separately in the audio track metadata), so it doesn't need to be pretty."""
     slug = re.sub(r"[^A-Za-z0-9._ -]", "", title).strip().replace(" ", "_")[:40]
     slug = slug or "song"
     return f"ng_{song_id}_{slug}.mp3"

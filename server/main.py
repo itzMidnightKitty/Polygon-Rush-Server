@@ -6,6 +6,8 @@ from sqlalchemy import func, inspect, text
 from typing import List, Optional
 import zlib
 import base64
+import hashlib
+import json
 
 from . import models, schemas, auth, database
 from .database import engine, get_db
@@ -16,19 +18,46 @@ def _auto_migrate():
     """create_all() only creates missing tables, not missing columns on tables
     that already exist in the deployed DB — add any newly-added columns here."""
     inspector = inspect(engine)
-    existing_cols = {c['name'] for c in inspector.get_columns('level_versions')}
-    new_columns = {
+    existing_lv_cols = {c['name'] for c in inspector.get_columns('level_versions')}
+    new_lv_columns = {
         'moderator_suggested_stars': 'INTEGER DEFAULT 0',
         'sent_by_id': 'INTEGER',
     }
+    existing_user_cols = {c['name'] for c in inspector.get_columns('users')}
+    new_user_columns = {
+        'playtime_seconds': 'INTEGER DEFAULT 0',
+        'is_playtester': 'BOOLEAN DEFAULT FALSE',
+    }
     with engine.begin() as conn:
-        for col_name, col_def in new_columns.items():
-            if col_name not in existing_cols:
+        for col_name, col_def in new_lv_columns.items():
+            if col_name not in existing_lv_cols:
                 conn.execute(text(f"ALTER TABLE level_versions ADD COLUMN {col_name} {col_def}"))
+        for col_name, col_def in new_user_columns.items():
+            if col_name not in existing_user_cols:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
 
 _auto_migrate()
 
 app = FastAPI(title="Polygon Rush API")
+
+def _compute_demons_beaten(db, user_id):
+    """Distinct demon-tier (6-10 star) levels this user has a recorded
+    completion for -- computed from existing completion data rather than a
+    separate counter, so it can't drift out of sync or be double-counted."""
+    return db.query(models.LevelCompletion.level_version_id).join(
+        models.LevelVersion, models.LevelCompletion.level_version_id == models.LevelVersion.id
+    ).filter(
+        models.LevelCompletion.user_id == user_id,
+        models.LevelVersion.stars >= 6
+    ).distinct().count()
+
+def _finalize_user(db, user):
+    """Attach the computed fields UserResponse needs beyond plain columns."""
+    if user.icon_ufo is None: user.icon_ufo = 0
+    if user.playtime_seconds is None: user.playtime_seconds = 0
+    if user.is_playtester is None: user.is_playtester = False
+    user.demons_beaten = _compute_demons_beaten(db, user.id)
+    return user
 
 # --- AUTH ROUTES ---
 
@@ -51,7 +80,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    return new_user
+    return _finalize_user(db, new_user)
 
 @app.post("/login")
 def login(user: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -91,6 +120,7 @@ def get_users(search: Optional[str] = None, db: Session = Depends(get_db)):
             "creator_points": u.creator_points,
             "is_admin": u.is_admin,
             "is_moderator": u.is_moderator,
+            "is_playtester": bool(u.is_playtester),
             "icon_cube": u.icon_cube,
             "icon_ship": u.icon_ship,
             "icon_ball": u.icon_ball,
@@ -106,8 +136,7 @@ def get_user(username: str, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.icon_ufo is None: user.icon_ufo = 0
-    return user
+    return _finalize_user(db, user)
 
 @app.put("/users/me/icons", response_model=schemas.UserResponse)
 def update_icons(profile: schemas.UserProfileUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -120,7 +149,15 @@ def update_icons(profile: schemas.UserProfileUpdate, db: Session = Depends(get_d
     if profile.color2 is not None: current_user.color2 = profile.color2
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return _finalize_user(db, current_user)
+
+@app.post("/users/me/playtime", response_model=schemas.UserResponse)
+def report_playtime(data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    seconds = data.get("seconds", 0)
+    if isinstance(seconds, (int, float)) and 0 < seconds < 3600:  # sanity clamp per report
+        current_user.playtime_seconds = (current_user.playtime_seconds or 0) + int(seconds)
+        db.commit()
+    return _finalize_user(db, current_user)
 
 @app.delete("/users/me")
 def delete_my_account(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -185,8 +222,7 @@ def admin_update_user_stats(username: str, stats: dict, db: Session = Depends(ge
 
     db.commit()
     db.refresh(target)
-    if target.icon_ufo is None: target.icon_ufo = 0
-    return target
+    return _finalize_user(db, target)
 
 @app.post("/admin/users/{username}/mod", response_model=schemas.UserResponse)
 def toggle_user_mod(username: str, data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -200,8 +236,21 @@ def toggle_user_mod(username: str, data: dict, db: Session = Depends(get_db), cu
     target.is_moderator = data.get("is_moderator", False)
     db.commit()
     db.refresh(target)
-    if target.icon_ufo is None: target.icon_ufo = 0
-    return target
+    return _finalize_user(db, target)
+
+@app.post("/admin/users/{username}/playtester", response_model=schemas.UserResponse)
+def toggle_user_playtester(username: str, data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+
+    target = db.query(models.User).filter(func.lower(models.User.username) == username.lower()).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target.is_playtester = data.get("is_playtester", False)
+    db.commit()
+    db.refresh(target)
+    return _finalize_user(db, target)
 
 
 # --- LEVEL ROUTES ---
@@ -533,17 +582,77 @@ def get_comments(level_id: str, db: Session = Depends(get_db)):
 # --- UPDATER ROUTES ---
 @app.get("/version")
 def check_version():
-    return {"success": True, "version": 2.4}
+    return {"success": True, "version": 3.2}
 
 @app.get("/download_update")
 def download_update(file: str = "main.py"):
-    allowed_files = {"main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py", "newgrounds.py"}
+    allowed_files = {"main.py", "player.py", "network.py", "config.py", "game_objects.py", "editor.py", "level_manager.py", "newgrounds.py", "ui_elements.py", "graphics.py", "audio_manager.py", "discord_rpc.py"}
     if file not in allowed_files:
         raise HTTPException(status_code=400, detail="Invalid file")
     path = f"server/client_updates/{file}"
     if os.path.exists(path):
         return FileResponse(path, filename=file)
     return {"success": False, "error": "No update available"}
+
+# --- OFFICIAL LEVELS (admin-pushed, shipped to every client alongside updates) ---
+OFFICIAL_LEVELS_DIR = os.path.join(os.path.dirname(__file__), "official_levels")
+os.makedirs(OFFICIAL_LEVELS_DIR, exist_ok=True)
+
+@app.get("/official_levels/manifest")
+def official_levels_manifest():
+    """Every client compares this against its local levels/official/ folder
+    (by filename + content hash) to know what to download/update/remove."""
+    result = []
+    for fname in sorted(os.listdir(OFFICIAL_LEVELS_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(OFFICIAL_LEVELS_DIR, fname)
+        try:
+            with open(path, "rb") as f:
+                content = f.read()
+        except Exception:
+            continue
+        result.append({"filename": fname, "hash": hashlib.sha256(content).hexdigest()[:16]})
+    return result
+
+@app.get("/official_levels/download")
+def official_levels_download(file: str):
+    safe = os.path.basename(file)  # no path traversal
+    if not safe.endswith(".json"):
+        raise HTTPException(status_code=400, detail="Invalid file")
+    path = os.path.join(OFFICIAL_LEVELS_DIR, safe)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, filename=safe, media_type="application/json")
+
+@app.post("/admin/official_levels/upload")
+def upload_official_level(payload: dict, current_user: models.User = Depends(auth.get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+    filename = (payload.get("filename") or "").strip()
+    data = payload.get("data")
+    if not filename or not data:
+        raise HTTPException(status_code=400, detail="filename and data required")
+    if not filename.endswith(".json"):
+        filename += ".json"
+    safe = os.path.basename(filename)
+    try:
+        json.loads(data)  # reject anything that isn't valid level JSON
+    except Exception:
+        raise HTTPException(status_code=400, detail="data is not valid JSON")
+    with open(os.path.join(OFFICIAL_LEVELS_DIR, safe), "w", encoding="utf-8") as f:
+        f.write(data)
+    return {"success": True, "filename": safe}
+
+@app.delete("/admin/official_levels/{filename}")
+def delete_official_level(filename: str, current_user: models.User = Depends(auth.get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+    safe = os.path.basename(filename)
+    path = os.path.join(OFFICIAL_LEVELS_DIR, safe)
+    if os.path.exists(path):
+        os.remove(path)
+    return {"success": True}
 
 @app.get("/")
 def read_root():

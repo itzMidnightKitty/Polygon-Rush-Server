@@ -9,6 +9,7 @@ class Level:
         self.music = None
         self.ng_song_id = None
         self.ng_song_name = None
+        self.song_offset = 0.0
         self.speed = config.SCROLL_SPEED
         self.name = "Unnamed"
         self.creator = "Unknown"
@@ -41,6 +42,7 @@ class Level:
                 self.music = data.get("music", None)
                 self.ng_song_id = data.get("ng_song_id", None)
                 self.ng_song_name = data.get("ng_song_name", None)
+                self.song_offset = data.get("song_offset", 0.0)
                 if "song_data" in data and self.music:
                     audio_path = os.path.join("audio", "music", self.music)
                     if not os.path.exists(audio_path):
@@ -123,6 +125,7 @@ class Level:
             "music": self.music,
             "ng_song_id": getattr(self, 'ng_song_id', None),
             "ng_song_name": getattr(self, 'ng_song_name', None),
+            "song_offset": getattr(self, 'song_offset', 0.0),
             "speed": self.speed,
             "start_gamemode": self.start_gamemode,
             "start_bg_idx": self.start_bg_idx,
@@ -157,12 +160,32 @@ class Level:
                 return
         self.end_x = max([obj.x for obj in self.objects] + [1200]) + 400
 
+    def get_spawn_points(self):
+        """All spawn points, sorted left-to-right by x. The furthest-right one is
+        the default spawn (matches placing later/alternate starts to the left)."""
+        pts = [(o.x, o.y) for o in self.objects if o.type == config.OBJ_SPAWN]
+        pts.sort(key=lambda p: p[0])
+        return pts
+
+    def get_closest_spawn(self, current_x, direction):
+        """direction: -1 for left, +1 for right. Returns the closest spawn (x,y)
+        strictly in that direction from current_x, wrapping around to the far end
+        if already at the edge in that direction (so cycling never just stops
+        dead at one end) -- or None if there's nothing to switch to at all."""
+        pts = self.get_spawn_points()
+        if len(pts) < 2:
+            return None
+        if direction < 0:
+            candidates = [p for p in pts if p[0] < current_x]
+            return candidates[-1] if candidates else pts[-1]
+        else:
+            candidates = [p for p in pts if p[0] > current_x]
+            return candidates[0] if candidates else pts[0]
+
     def get_spawn_x(self):
-        for obj in self.objects:
-            if obj.type == config.OBJ_SPAWN: return obj.x
-        return 200
-        
+        pts = self.get_spawn_points()
+        return pts[-1][0] if pts else 200
+
     def get_spawn_y(self):
-        for obj in self.objects:
-            if obj.type == config.OBJ_SPAWN: return obj.y
-        return None
+        pts = self.get_spawn_points()
+        return pts[-1][1] if pts else None

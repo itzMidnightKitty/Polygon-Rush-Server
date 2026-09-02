@@ -13,9 +13,17 @@ def S(val):
 # --- CONFIGURATION & CONSTANTS ---
 FPS = 60
 GRID_SIZE = 40
-SCROLL_SPEED = 7.8 
-GROUND_Y = BASE_H - 120 
-CEILING_Y = GROUND_Y - (12 * GRID_SIZE) 
+# SCROLL_SPEED is set below, right after speed_for_trigger(), so a level's default
+# speed is genuinely calibrated to "1x" in the same units as in-level speed triggers
+# (it used to be a separately hardcoded 7.8, which didn't match OBJ_SPEED_1X's 6.95).
+GROUND_Y = BASE_H - 120
+CEILING_Y = GROUND_Y - (12 * GRID_SIZE)
+# Cap on vel_y for cube/ball, the two modes whose fall speed otherwise accumulates
+# unbounded (ship/ufo already clamp their own vel_y right where it's applied). Without
+# this a long fall keeps accelerating past any speed a jump ever produces -- feels wrong,
+# and lets the player move further than a grid cell in one frame, which is how pads/
+# portals/orbs get skipped over (collision is a per-frame overlap check).
+TERMINAL_VELOCITY = 20.0
 
 # Player Preferences
 P_CUBE_IDX = 0
@@ -193,6 +201,20 @@ def speed_for_trigger(obj_type):
     """World units/frame for a speed-trigger object type, or None if not one."""
     bps = _SPEED_TRIGGER_BLOCKS_PER_SEC.get(obj_type)
     return None if bps is None else bps * GRID_SIZE / FPS
+
+# The default scroll speed for a level that hasn't set its own starting speed —
+# true "1x", matching OBJ_SPEED_1X exactly (see note above).
+SCROLL_SPEED = speed_for_trigger(OBJ_SPEED_1X)
+
+# Named starting-speed presets for the level editor's "Starting Speed" option,
+# sharing the same values as the in-level speed triggers so a level always plays
+# at the speed its creator picked, whether set at the start or via a trigger.
+STARTING_SPEED_PRESETS = [
+    ("0.5x", _SPEED_TRIGGER_BLOCKS_PER_SEC[OBJ_SPEED_05X] * GRID_SIZE / FPS),
+    ("1x", _SPEED_TRIGGER_BLOCKS_PER_SEC[OBJ_SPEED_1X] * GRID_SIZE / FPS),
+    ("2x", _SPEED_TRIGGER_BLOCKS_PER_SEC[OBJ_SPEED_2X] * GRID_SIZE / FPS),
+    ("3x", _SPEED_TRIGGER_BLOCKS_PER_SEC[OBJ_SPEED_3X] * GRID_SIZE / FPS),
+]
 
 def apply_speed_triggers(objects, x, level):
     """Activate any not-yet-activated speed trigger at or behind x, updating level.speed."""
